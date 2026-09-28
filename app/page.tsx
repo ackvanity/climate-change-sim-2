@@ -1,69 +1,107 @@
-import Image from "next/image";
+import Image from 'next/image';
+import Link, { LinkProps } from 'next/link';
+import React from 'react';
+
+function Collapsible({
+  heading,
+  children,
+  className,
+}: {
+  heading: string;
+  children?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section>
+      <h3 className="mb-8 text-4xl font-bold">{heading}</h3>
+      <div className={className}>{children}</div>
+    </section>
+  );
+}
+
+function Card({
+  hero,
+  title,
+  children,
+  writeup,
+  simulation,
+}: {
+  hero?: React.ReactNode;
+  children: React.ReactNode;
+  title: string;
+  writeup?: LinkProps['href'];
+  simulation?: LinkProps['href'];
+}) {
+  return (
+    <div className="aspect-3/4 w-96 bg-slate-100 transition-all hover:bg-slate-200">
+      <div className="relative aspect-4/3 w-full bg-slate-400">{hero}</div>
+      <div className="m-8 pb-2">
+        <h4 className="text-lg font-bold">{title}</h4>
+        {children}
+        <div className="mt-6 flex w-full flex-row flex-wrap justify-between pb-4">
+          {writeup ? (
+            <span className="relative m-2 ms-0 p-2 before:absolute before:-inset-1 before:-ms-0 before:block before:w-0 before:bg-slate-300 before:transition-all hover:before:w-[calc(100%+8px)]">
+              <Link className="relative" href={writeup}>
+                Read Writeup
+              </Link>
+            </span>
+          ) : (
+            <span className="block"></span>
+          )}
+          {simulation && (
+            <span className="relative m-2 me-0 bg-slate-500 p-2 text-white before:absolute before:-inset-1 before:-ms-0 before:block before:w-0 before:bg-slate-700 before:transition-all hover:before:w-[calc(100%+8px)]">
+              <Link className="relative" href={simulation}>
+                Start Simulation
+              </Link>
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <>
+      <header className="flex h-screen w-full flex-col justify-center">
+        <h1 className="w-full text-center text-6xl">Climate Change</h1>
+        <p className="mx-auto mt-12 w-full max-w-96 text-center text-lg">
+          Lorem ipsum dolor sit amet consectetur adipisicing elit. Minima
+          accusantium est, eum, ut eaque id totam, culpa dolores inventore quod
+          incidunt necessitatibus voluptates unde? Mollitia aut inventore
+          repellendus minima esse?
+        </p>
+      </header>
+      <main className="w-full px-32">
+        <h2 className="mb-16 text-center text-5xl">Simulations</h2>
+        <Collapsible heading="Introductory" className="flex flex-row flex-wrap">
+          <Card
+            title="Thermodynamics of Climate Change"
+            simulation="/simulations/climate"
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+            <p>
+              Lorem ipsum dolor sit amet consectetur adipisicing elit.
+              Perferendis, laborum repellendus itaque sed expedita optio
+              adipisci officia similique iste earum molestiae cupiditate, beatae
+              assumenda, eius necessitatibus rem ipsa! Vero, possimus!
+            </p>
+          </Card>
+        </Collapsible>
       </main>
-    </div>
+      <footer className="w-full px-32">
+        <p className="text-center">
+          Created by{' '}
+          <a
+            href="https://ackhava.dev"
+            className="relative inline-block font-bold before:absolute before:-inset-1 before:box-content before:block before:h-full before:w-0 before:border-b-3 before:border-b-[#F58B56] before:transition-all before:duration-300 after:absolute after:-inset-1 after:z-[-1] after:box-border after:block after:h-full after:w-0 after:border-b-5 after:border-b-[#F58B56] after:transition-all after:duration-300 hover:before:w-full hover:after:w-full"
+          >
+            <span className="relative">Ackhava Adam Malonda</span>
+          </a>{' '}
+          in 2026.
+        </p>
+        <p>Links</p>
+      </footer>
+    </>
   );
 }

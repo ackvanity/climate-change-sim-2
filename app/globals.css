@@ -1,26 +1,71 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@theme {
+  --color-red-*: initial;
+  --color-orange-*: initial;
+  --color-amber-*: initial;
+  --color-yellow-*: initial;
+  --color-lime-*: initial;
+  --color-green-*: initial;
+  --color-emerald-*: initial;
+  --color-teal-*: initial;
+  --color-cyan-*: initial;
+  --color-sky-*: initial;
+  --color-blue-*: initial;
+  --color-indigo-*: initial;
+  --color-violet-*: initial;
+  --color-purple-*: initial;
+  --color-fuschia-*: initial;
+  --color-pink-*: initial;
+  --color-rose-*: initial;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-primary-100: #e9f9d2;
+  --color-primary-200: #cde5ab;
+  --color-primary-300: #b1d084;
+  --color-primary-400: #95bb5d;
+  --color-primary-500: #79a636;
+  --color-primary-600: #6a942b;
+  --color-primary-700: #5a8120;
+  --color-primary-800: #4a6f15;
+  --color-primary-900: #3a5c0a;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+  --color-red-100: #ffd9cc;
+  --color-red-200: #f3b3a4;
+  --color-red-300: #e78c7b;
+  --color-red-400: #db6553;
+  --color-red-500: #cf3e2a;
+  --color-red-600: #ba3220;
+  --color-red-700: #a52615;
+  --color-red-800: #901a0b;
+  --color-red-900: #7a0e00;
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  --color-blue-100: #e0ebeb;
+  --color-blue-200: #c4d9d9;
+  --color-blue-300: #a7c6c6;
+  --color-blue-400: #8ab3b4;
+  --color-blue-500: #6da0a1;
+  --color-blue-600: #5c8889;
+  --color-blue-700: #4b6f70;
+  --color-blue-800: #3a5757;
+  --color-blue-900: #283e3e;
+
+  --color-brown-100: #ffc994;
+  --color-brown-200: #ffc18e;
+  --color-brown-300: #ffb987;
+  --color-brown-400: #ffb181;
+  --color-brown-500: #ffa97a;
+  --color-brown-600: #de845c;
+  --color-brown-700: #bd5f3d;
+  --color-brown-800: #9c3a1f;
+  --color-brown-900: #7a1400;
+
+  --color-yellow-100: #fbe4b6;
+  --color-yellow-200: #fcdf99;
+  --color-yellow-300: #fdd97c;
+  --color-yellow-400: #fed35f;
+  --color-yellow-500: #ffcd41;
+  --color-yellow-600: #e2ae35;
+  --color-yellow-700: #c58f28;
+  --color-yellow-800: #a8701c;
+  --color-yellow-900: #8a510f;
 }
