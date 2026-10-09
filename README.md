@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Development
 
-## Getting Started
+## Climate change
 
-First, run the development server:
+Required setups:
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Python (for precomputation): Virtual environment, `numpy`, and _HITRAN_
+- C++: _WASM_
+
+## Setting up
+
+See each simulation for what they exactly need. Not all dependencies are used on every simulation and some are development-only.
+
+### Python
+
+- Create a virtual environment
+- Activate it
+- Install core dependencies: `black`
+
+**NOTES**:
+
+1. Kindly format all Python files with `black` before a commit!
+
+#### HITRAN API (HAPI) `hitran-api`
+
+In the working directory of your simulation, make a `config.json` like this:
+
+```json
+{
+  "engine": "sqlite",
+  "database": "local",
+  "database_dir": "./",
+  "echo": false,
+  "debug": false,
+  "host": "https://hitran.org",
+  "api_version": "v2",
+  "api_key": "YOUR_API_KEY_HERE"
+}
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Note that you need to register an account and generate an API key, and that this JSON file must be present where you invoke your scripts. I prefer writing it once on my root directory and copy it to any simulation folder that needs it. The HITRAN API is usually only needed for data generation in Python.
