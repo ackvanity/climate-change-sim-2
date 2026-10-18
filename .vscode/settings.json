@@ -10,5 +10,8 @@
     "editor.formatOnPaste": false,
     "editor.formatOnSaveMode": "file"
   },
-  "python.REPL.enableREPLSmartSend": false
+  "python.REPL.enableREPLSmartSend": false,
+  "[cpp]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools"
+  }
 }
