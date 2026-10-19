@@ -1,3 +1,4 @@
+#define _USE_MATH_DEFINES
 #include <bits/stdc++.h>
 #include "Faddeeva.hh"
 #include "config.h"
@@ -5,6 +6,7 @@
 
 namespace CKD
 {
+
 // Set to 1 to evaluate the Faddeeva function to machine precision and compare the relative error of the approximated profile and the reference profile, and logs maximum
 // Set to 2 to compute the relative error and create a frequency distribution of errors
 // Set to -1 to force using the Faddeeva function to machine precision
@@ -47,7 +49,8 @@ namespace CKD
       name = gas_name;
 
       {
-        std::ifstream file(gas_name + "_lines.bin", std::ios::binary);
+        std::cout << "precompute_bin/" + gas_name + "_lines.bin" << std::endl;
+        std::ifstream file("precompute_bin/" + gas_name + "_lines.bin", std::ios::binary);
 
         if (!file.is_open())
         {
@@ -62,7 +65,7 @@ namespace CKD
       }
 
       {
-        std::ifstream file(gas_name + "_Q.bin", std::ios::binary);
+        std::ifstream file("precompute_bin/" + gas_name + "_Q.bin", std::ios::binary);
 
         if (!file.is_open())
         {
@@ -81,17 +84,29 @@ namespace CKD
 
     double Q_value(double T) const
     {
-      int i1 = T - 1;
-      int i2 = T;
+      int i1 = static_cast<int>(std::floor(T));
+      int i2 = i1 + 1;
       if (i1 < 0)
         return Q.front();
       if (i2 >= 400)
         return Q.back();
 
-      double frac = T - i2;
+      double frac = T - i1;
       return (Q[i2] - Q[i1]) * frac + Q[i1];
     }
   };
+
+  const Species species_co2("CO2", 44.01);
+  const Species species_h2o("H2O", 18.015);
+  const Species species_o3("O3", 47.997);
+  const Species species_ch4("CH4", 16.04);
+  const Species species_n2o("N2O", 44.013);
+
+  Binning result_co2[15 * 18 * 11];
+  Binning result_h2o[15 * 18 * 16];
+  Binning result_o3[15 * 18 * 11];
+  Binning result_ch4[15 * 18 * 11];
+  Binning result_n2o[15 * 18 * 11];
 
   double approximate_faddeeva(std::complex<double> z)
   {
@@ -144,6 +159,8 @@ namespace CKD
 
   Binning compute_ckd(const Species &species, double T, double P, double mixing_ratio = 0)
   {
+    const double INV_SQRT_PI = 1.0 / std::sqrt(M_PI);
+
     Binning result;
 
     std::vector<LineCompute> lines_large_y;  // y >= 15
@@ -198,7 +215,7 @@ namespace CKD
       {
         double nu = start_nu + Config::NU_STEP * idx;
 
-        while (lines_small_y_end != lines_small_y.size() && lines_small_y[lines_small_y_end].nu <= (nu + LINES_WIDTH))
+        while (lines_small_y_end < lines_small_y.size() && lines_small_y[lines_small_y_end].nu <= (nu + LINES_WIDTH))
           lines_small_y_end++;
         while (lines_small_y_start < lines_small_y_end && lines_small_y[lines_small_y_start].nu <= (nu - LINES_WIDTH))
           lines_small_y_start++;
@@ -219,12 +236,14 @@ namespace CKD
           double Q = 1.5 * P;
           double R = std::exp(-P);
 
-          double V = R - (y / std::sqrt(M_PI) / P) * (R * R * (4 * P * P + 7 * P + 4 + Q) - Q - 1);
+          double V = (std::abs(x) > 1e-3)
+                         ? (R - (y * INV_SQRT_PI / P) * (R * R * (4.0 * P * P + 7.0 * P + 4.0 + 1.5 * P) - 1.5 * P - 1.0))
+                         : (1.0 - 2.0 * y * INV_SQRT_PI + P * (4.0 * y * INV_SQRT_PI - 1.0 + P * (0.5 - 5.0 * y * INV_SQRT_PI / (3.0))));
 
           LBL[idx] += V * lines_small_y[line].S_T;
         }
 
-        while (lines_medium_y_end != lines_medium_y.size() && lines_medium_y[lines_medium_y_end].nu <= (nu + LINES_WIDTH))
+        while (lines_medium_y_end < lines_medium_y.size() && lines_medium_y[lines_medium_y_end].nu <= (nu + LINES_WIDTH))
           lines_medium_y_end++;
         while (lines_medium_y_start < lines_medium_y_end && lines_medium_y[lines_medium_y_start].nu <= (nu - LINES_WIDTH))
           lines_medium_y_start++;
@@ -239,7 +258,7 @@ namespace CKD
           LBL[idx] += V * lines_medium_y[line].S_T;
         }
 
-        while (lines_large_y_end != lines_large_y.size() && lines_large_y[lines_large_y_end].nu <= (nu + LINES_WIDTH))
+        while (lines_large_y_end < lines_large_y.size() && lines_large_y[lines_large_y_end].nu <= (nu + LINES_WIDTH))
           lines_large_y_end++;
         while (lines_large_y_start < lines_large_y_end && lines_large_y[lines_large_y_start].nu <= (nu - LINES_WIDTH))
           lines_large_y_start++;
@@ -320,28 +339,6 @@ namespace CKD
     }
   }
 
-  // int main()
-  // {
-  //   Species species("CO2", 44.01);
-
-  //   auto start = std::chrono::steady_clock::now();
-  //   std::cout << "COMPUTING" << std::endl;
-  //   auto result = compute_ckd(species, 300, 1, 1);
-  //   for (auto ckd : result.bins)
-  //   {
-  //     for (auto point : ckd.k)
-  //     {
-  //       std::cout << point << " ";
-  //     }
-  //     std::cout << std::endl;
-  //   }
-
-  //   auto end = std::chrono::steady_clock::now();
-  //   auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-  //   std::cout << elapsed_ms.count() << std::endl;
-  // }
-
   void save_data(const std::string &filename, void *data, size_t size)
   {
     std::ofstream file(filename, std::ios::binary);
@@ -353,78 +350,10 @@ namespace CKD
     file.write(reinterpret_cast<const char *>(data), size);
   }
 
-  void compute_ckd()
+  void run_tasks()
   {
-
-    const Species species_co2("CO2", 44.01);
-    const Species species_h2o("H2O", 18.015);
-    const Species species_o3("O3", 47.997);
-    const Species species_ch4("CH4", 16.04);
-    const Species species_n2o("N2O", 44.013);
-
-    Binning result_co2[8 * 18 * 11];
-    Binning result_h2o[8 * 18 * 16];
-    Binning result_o3[8 * 18 * 11];
-    Binning result_ch4[8 * 18 * 11];
-    Binning result_n2o[8 * 18 * 11];
-
-    for (int T_idx = 0; T_idx < 8; T_idx++)
-    {
-      for (int P_idx = 0; P_idx < 18; P_idx++)
-      {
-        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
-        {
-          tasks.push_back({species_co2, 180 + 20 * T_idx, std::exp2(-P_idx), (4.2 + 0.42 * vmr_idx) * 1e-4, T_idx + 8 * (P_idx + 18 * vmr_idx)});
-        }
-      }
-    }
-
-    for (int T_idx = 0; T_idx < 8; T_idx++)
-    {
-      for (int P_idx = 0; P_idx < 18; P_idx++)
-      {
-        for (int vmr_idx = 0; vmr_idx < 16; vmr_idx++)
-        {
-          tasks.push_back({species_h2o, 180 + 20 * T_idx, std::exp2(-P_idx), 0.04 * std::exp2(-vmr_idx), T_idx + 8 * (P_idx + 18 * vmr_idx)});
-        }
-      }
-    }
-
-    for (int T_idx = 0; T_idx < 8; T_idx++)
-    {
-      for (int P_idx = 0; P_idx < 18; P_idx++)
-      {
-        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
-        {
-          tasks.push_back({species_o3, 180 + 20 * T_idx, std::exp2(-P_idx), 1e-5 * std::exp2(-vmr_idx), T_idx + 8 * (P_idx + 18 * vmr_idx)});
-        }
-      }
-    }
-
-    for (int T_idx = 0; T_idx < 8; T_idx++)
-    {
-      for (int P_idx = 0; P_idx < 18; P_idx++)
-      {
-        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
-        {
-          tasks.push_back({species_ch4, 180 + 20 * T_idx, std::exp2(-P_idx), 1e-6 * (1 + 0.3 * vmr_idx), T_idx + 8 * (P_idx + 18 * vmr_idx)});
-        }
-      }
-    }
-
-    for (int T_idx = 0; T_idx < 8; T_idx++)
-    {
-      for (int P_idx = 0; P_idx < 18; P_idx++)
-      {
-        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
-        {
-          tasks.push_back({species_n2o, 180 + 20 * T_idx, std::exp2(-P_idx), 1e-7 * (1 + 0.4 * vmr_idx), T_idx + 8 * (P_idx + 18 * vmr_idx)});
-        }
-      }
-    }
-
-    std::jthread watcher(progress_watcher);
-
+    compute_idx = 0;
+    completed = 0;
     auto start = std::chrono::steady_clock::now();
     int num_threads = std::thread::hardware_concurrency();
     std::vector<std::thread> threads;
@@ -437,17 +366,6 @@ namespace CKD
     {
       thread.join();
     }
-
-    auto end = std::chrono::steady_clock::now();
-
-    watcher.request_stop();
-    watcher.join();
-
-    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-    std::cout << elapsed_ms.count() << std::endl;
-
-    std::cout << "Saving data..." << std::endl;
 
     for (const auto &task : tasks)
     {
@@ -477,14 +395,104 @@ namespace CKD
         result_o3[task.idx] = task.result;
       }
     }
-
-    save_data("CO2_transmission.bin", result_co2, sizeof result_co2);
-    save_data("N2O_transmission.bin", result_n2o, sizeof result_n2o);
-    save_data("CH4_transmission.bin", result_ch4, sizeof result_ch4);
-    save_data("H2O_transmission.bin", result_h2o, sizeof result_h2o);
-    save_data("O3_transmission.bin", result_o3, sizeof result_o3);
+    tasks.clear();
   }
-}
+
+  void compute_ckd()
+  {
+    std::cout << "START";
+
+    for (int T_idx = 0; T_idx < 15; T_idx++)
+    {
+      for (int P_idx = 0; P_idx < 18; P_idx++)
+      {
+        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
+        {
+          tasks.push_back({species_co2, 180 + 10 * T_idx, std::exp2(-P_idx), (4.2 + 0.42 * vmr_idx) * 1e-4, T_idx + 15 * (P_idx + 18 * vmr_idx)});
+        }
+      }
+    }
+
+    std::jthread watcher(progress_watcher);
+    run_tasks();
+    save_data("precompute_bin/CO2_transmission.bin", result_co2, sizeof result_co2);
+
+    for (int T_idx = 0; T_idx < 15; T_idx++)
+    {
+      for (int P_idx = 0; P_idx < 18; P_idx++)
+      {
+        for (int vmr_idx = 0; vmr_idx < 16; vmr_idx++)
+        {
+          tasks.push_back({species_h2o, 180 + 10 * T_idx, std::exp2(-P_idx), 0.04 * std::exp2(-vmr_idx), T_idx + 15 * (P_idx + 18 * vmr_idx)});
+        }
+      }
+    }
+
+    run_tasks();
+    save_data("precompute_bin/H2O_transmission.bin", result_h2o, sizeof result_h2o);
+
+    for (int T_idx = 0; T_idx < 15; T_idx++)
+    {
+      for (int P_idx = 0; P_idx < 18; P_idx++)
+      {
+        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
+        {
+          tasks.push_back({species_o3, 180 + 10 * T_idx, std::exp2(-P_idx), 1e-5 * std::exp2(-vmr_idx), T_idx + 15 * (P_idx + 18 * vmr_idx)});
+        }
+      }
+    }
+
+    run_tasks();
+    save_data("precompute_bin/O3_transmission.bin", result_o3, sizeof result_o3);
+
+    for (int T_idx = 0; T_idx < 15; T_idx++)
+    {
+      for (int P_idx = 0; P_idx < 18; P_idx++)
+      {
+        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
+        {
+          tasks.push_back({species_ch4, 180 + 10 * T_idx, std::exp2(-P_idx), 1e-6 * (1 + 0.3 * vmr_idx), T_idx + 15 * (P_idx + 18 * vmr_idx)});
+        }
+      }
+    }
+
+    run_tasks();
+    save_data("precompute_bin/CH4_transmission.bin", result_ch4, sizeof result_ch4);
+
+    for (int T_idx = 0; T_idx < 15; T_idx++)
+    {
+      for (int P_idx = 0; P_idx < 18; P_idx++)
+      {
+        for (int vmr_idx = 0; vmr_idx < 11; vmr_idx++)
+        {
+          tasks.push_back({species_n2o, 180 + 10 * T_idx, std::exp2(-P_idx), 1e-7 * (1 + 0.4 * vmr_idx), T_idx + 15 * (P_idx + 18 * vmr_idx)});
+        }
+      }
+    }
+
+    run_tasks();
+    save_data("precompute_bin/N2O_transmission.bin", result_n2o, sizeof result_n2o);
+
+    // std::random_device rd;
+    // std::mt19937_64 mt(rd());
+    // std::vector<int> tmp;
+    // for (auto i : tasks)
+    //   tmp.push_back(tmp.size());
+    // std::shuffle(tmp.begin(), tmp.end(), mt);
+    // std::vector<Workload> vec;
+    // for (int i = 0; i < tmp.size(); i++)
+    // {
+    //   vec.push_back(tasks[tmp[i]]);
+    // }
+    // swap(vec, tasks);
+    // vec.clear();
+    // tmp.clear();
+
+    watcher.request_stop();
+    watcher.join();
+  }
+
+} // namespace CKD
 
 namespace Greenhouse
 {
@@ -519,10 +527,29 @@ namespace Greenhouse
       std::cout << std::endl;
     }
   }
+
+  void compute_energy_error(std::vector<double> T)
+  {
+    constexpr double mr_air = 28.96e-3; // The mr of the air, assumed to be constant, measured in KILOgrams (not grams) per mole.
+    constexpr double h = 1000;          // 1 km slabs
+    // 1 km slices
+    std::vector<double> P; // in atm
+    std::vector<double> rho;
+    P.push_back(1); // Hard-code 1 atm at surface
+
+    double y = h / 2.0; // assume height at center
+
+    for (auto t : T)
+    {
+      rho.push_back(P.back() * mr_air / (PhysicsConstants::R * t));
+      P.push_back(P.back() - rho.back() * (PhysicsConstants::g * (PhysicsConstants::R_E * PhysicsConstants::R_E) / ((PhysicsConstants::R_E + y) * (PhysicsConstants::R_E + y))));
+    }
+    P.pop_back();
+  }
 }
 
 int main()
 {
   CKD::compute_ckd();
-  Greenhouse::compute_planck();
+  // Greenhouse::compute_planck();
 }
