@@ -5,14 +5,6 @@ import struct
 # Initialization
 db_dir = "hitran"
 
-
-class Physics:
-    h = 6.62607015e-34
-    c = 299792458
-    kB = 1.380649e-23
-    atm = 101325
-
-
 # Gases
 gases = {"H2O": 1, "CO2": 2, "O3": 3, "N2O": 4, "CH4": 6}
 
@@ -40,14 +32,14 @@ if __name__ == "__main__":
 
         num_lines = len(nu)
 
-        filename = f"{name}_Q.bin"
+        filename = f"precompute_bin/{name}_Q.bin"
         with open(filename, "wb") as f:
             for q in q_values:
                 f.write(struct.pack("d", q))
 
         print(f"Wrote {len(q_values)} Q-values for {name} to {filename}")
 
-        filename = f"{name}_lines.bin"
+        filename = f"precompute_bin/{name}_lines.bin"
         with open(filename, "wb") as f:
             f.write(struct.pack("Q", num_lines))
 

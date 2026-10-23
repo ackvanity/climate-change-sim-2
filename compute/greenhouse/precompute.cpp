@@ -4,6 +4,20 @@
 #include "config.h"
 #include <chrono>
 
+// slight coupling between CKD and atmospheric namespaces
+
+const CKD::Species species_co2("CO2", 44.01);
+const CKD::Species species_h2o("H2O", 18.015);
+const CKD::Species species_o3("O3", 47.997);
+const CKD::Species species_ch4("CH4", 16.04);
+const CKD::Species species_n2o("N2O", 44.013);
+
+CKD::Binning result_co2[15 * 18 * 11];
+CKD::Binning result_h2o[15 * 18 * 16];
+CKD::Binning result_o3[15 * 18 * 11];
+CKD::Binning result_ch4[15 * 18 * 11];
+CKD::Binning result_n2o[15 * 18 * 11];
+
 namespace CKD
 {
 
@@ -95,18 +109,6 @@ namespace CKD
       return (Q[i2] - Q[i1]) * frac + Q[i1];
     }
   };
-
-  const Species species_co2("CO2", 44.01);
-  const Species species_h2o("H2O", 18.015);
-  const Species species_o3("O3", 47.997);
-  const Species species_ch4("CH4", 16.04);
-  const Species species_n2o("N2O", 44.013);
-
-  Binning result_co2[15 * 18 * 11];
-  Binning result_h2o[15 * 18 * 16];
-  Binning result_o3[15 * 18 * 11];
-  Binning result_ch4[15 * 18 * 11];
-  Binning result_n2o[15 * 18 * 11];
 
   double approximate_faddeeva(std::complex<double> z)
   {
@@ -496,16 +498,26 @@ namespace CKD
 
 namespace Greenhouse
 {
-  constexpr int NUM_PLANCK_POINTS = 50;
+  constexpr int NUM_PLANCK_POINTS = 3000;
   constexpr int PLANCK_POINTS_START = 150;
+  constexpr double PLANCK_POINTS_STEP = 0.05;
+  constexpr int NUM_SLABS = 80;
+  constexpr double h = 1000; // 1 km slabs
+
+  struct Transmission
+  {
+    double T[Config::NUM_BINS];
+  };
 
   double planck[NUM_PLANCK_POINTS][Config::NUM_BINS]; // [T_idx][bins] where T = T_idx + PLANCK_POINTS_START
+
+  double S0[Config::NUM_BINS];
 
   void compute_planck()
   {
     for (int T_idx = 0; T_idx < NUM_PLANCK_POINTS; T_idx++)
     {
-      double T = T_idx + PLANCK_POINTS_START;
+      double T = T_idx * PLANCK_POINTS_STEP + PLANCK_POINTS_START;
       double nu = Config::NU_START;
       for (int bin_idx = 0; bin_idx < Config::NUM_BINS; bin_idx++)
       {
@@ -526,13 +538,108 @@ namespace Greenhouse
       }
       std::cout << std::endl;
     }
+
+    double T = 5778;
+    double nu = Config::NU_START;
+    for (int bin_idx = 0; bin_idx < Config::NUM_BINS; bin_idx++)
+    {
+      double nu_start = nu;
+      double nu_end = nu + Config::BIN_WIDTHS[bin_idx];
+      double integral = 0;
+      for (int g_idx = 0; g_idx < Config::NUM_G_POINTS; g_idx++) // Reuse Gaussian quadrature data from CKD
+      {
+        double f = (nu_start + (nu_end - nu_start) * Config::G_NODES[g_idx]) * PhysicsConstants::c * 100; // interpolate and convert from cm-1 to Hz
+        integral += Config::G_WEIGHTS[g_idx] * 2 * PhysicsConstants::h * pow(f, 3) / (pow(PhysicsConstants::c, 2) * (std::exp(PhysicsConstants::h * f / (PhysicsConstants::k_B * T)) - 1));
+        // integral += Config::G_WEIGHTS[g_idx] * 2;
+      }
+      integral *= (nu_end - nu_start) * PhysicsConstants::c * 100; // cm-1 to Hz
+
+      nu = nu_end;
+      S0[bin_idx] = integral / (PhysicsConstants::sigma * T * T * T * T) * 1361;
+    }
+    std::cout << std::endl;
   }
 
-  void compute_energy_error(std::vector<double> T)
+  Transmission compute_transmission(CKD::Species species, double T, double P, double vmr)
   {
+    double T_idx = T / 10.0 - 18;
+    int T_idx_0 = std::clamp((static_cast<int>(T_idx)), 0, 14);
+    int T_idx_1 = std::clamp(T_idx_0 + 1, 0, 14);
+
+    double logP_idx = -std::log2(P);
+    int logP_idx_0 = std::clamp((static_cast<int>(logP_idx)), 0, 17);
+    int logP_idx_1 = std::clamp(logP_idx_0 + 1, 0, 17);
+
+    Transmission result;
+    double vmr_idx;
+    int vmr_idx_0;
+    int vmr_idx_1;
+
+    if (species.name == "CO2")
+    {
+      vmr_idx = (vmr * 1e4 - 4.2) / 0.42;
+      vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 10);
+      vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
+    }
+
+    if (species.name == "H2O")
+    {
+      vmr_idx = -std::log2(vmr / 0.04);
+      vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 15);
+      vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 15);
+    }
+    if (species.name == "O3")
+    {
+      vmr_idx = -std::log2(vmr / 1e-5);
+      vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 10);
+      vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
+    }
+
+    if (species.name == "CH4")
+    {
+      vmr_idx = (vmr / 1e-6 - 1) / 0.3;
+      vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 10);
+      vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
+    }
+
+    if (species.name == "N2O")
+    {
+      vmr_idx = (vmr / 1e-7 - 1) / 0.4;
+      vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 10);
+      vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
+    }
+
+#define IDX(T, P, vmr) (T + 15 * (P + 18 * vmr))
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      result.T[bin] = 0;
+      for (int point = 0; point < Config::NUM_G_POINTS; point++)
+      {
+        double c00 = std::lerp(result_co2[IDX(T_idx_0, logP_idx_0, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_0, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c01 = std::lerp(result_co2[IDX(T_idx_0, logP_idx_1, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_0, logP_idx_1, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c10 = std::lerp(result_co2[IDX(T_idx_1, logP_idx_0, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_1, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c11 = std::lerp(result_co2[IDX(T_idx_1, logP_idx_1, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_1, logP_idx_1, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+
+        double c0 = std::lerp(c00, c01, std::clamp(logP_idx - logP_idx_0, 0.0, 1.0));
+        double c1 = std::lerp(c10, c11, std::clamp(logP_idx - logP_idx_0, 0.0, 1.0));
+
+        double c = std::lerp(c0, c1, std::clamp(T_idx - T_idx_0, 0.0, 1.0));
+
+        result.T[bin] += std::exp(-c * h) * Config::G_WEIGHTS[point];
+      }
+    }
+    return result;
+#undef IDX
+  }
+
+  // convention: Earth's temperature dead last
+  double compute_energy_error(std::vector<double> T)
+  {
+    const double T_E = T.back();
+    const double albedo = 0.3;
+    T.pop_back();
     constexpr double mr_air = 28.96e-3; // The mr of the air, assumed to be constant, measured in KILOgrams (not grams) per mole.
-    constexpr double h = 1000;          // 1 km slabs
-    // 1 km slices
+
     std::vector<double> P; // in atm
     std::vector<double> rho;
     P.push_back(1); // Hard-code 1 atm at surface
@@ -542,9 +649,89 @@ namespace Greenhouse
     for (auto t : T)
     {
       rho.push_back(P.back() * mr_air / (PhysicsConstants::R * t));
-      P.push_back(P.back() - rho.back() * (PhysicsConstants::g * (PhysicsConstants::R_E * PhysicsConstants::R_E) / ((PhysicsConstants::R_E + y) * (PhysicsConstants::R_E + y))));
+      P.push_back(P.back() - rho.back() * (PhysicsConstants::g * (PhysicsConstants::R_E * PhysicsConstants::R_E) / ((PhysicsConstants::R_E + y) * (PhysicsConstants::R_E + y))) / PhysicsConstants::atm);
+      y += h;
     }
     P.pop_back();
+    return 0.0;
+
+    // Code a subroutine to get transmission coefficients from before.
+    // Calculate energy fluxes going into and out of each gas
+    // Penalize error
+    // Lapse rates (so find the net flux on EACH BOUNDARY
+    std::vector<double> fluxes; // going from layer i down to i-1 is positive, else negative
+    fluxes.resize(T.size() + 1);
+    double transfer[Config::NUM_BINS];
+    memcpy(transfer, S0, sizeof transfer);
+
+    for (int i = (T.size() - 1); i >= 0; i--)
+    {
+      Transmission transmission;
+      memset(transmission.T, 0, sizeof transmission.T);
+      auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
+
+      auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      {
+        fluxes[i + 1] += transfer[bin];
+      }
+      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      {
+        transfer[bin] *= (1 - transmission.T[bin]);
+        transfer[bin] += planck[idx][bin];
+      }
+    }
+
+    auto idx_E = std::clamp<int>((T_E - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      fluxes[0] += transfer[bin];
+    }
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      transfer[bin] *= albedo;
+    }
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      transfer[bin] += planck[idx_E][bin];
+    }
+
+    for (int i = 0; i < T.size(); i++)
+    {
+      {
+        auto transmission = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
+        auto tmp = compute_transmission(species_co2, T[i], P[i], 422e-6);
+        auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+        for (int bin = 0; bin < Config::NUM_BINS; bin++)
+        {
+          fluxes[i] -= transfer[bin];
+        }
+        for (int bin = 0; bin < Config::NUM_BINS; bin++)
+        {
+          transfer[bin] *= (1 - transmission.T[bin]);
+          transfer[bin] += planck[idx][bin];
+        }
+      }
+    }
+
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      fluxes[0] -= transfer[bin];
+    }
+
+    double error = 0;
+    for (int i = 0; i < T.size(); i++)
+    {
+      if ((T[i] - T[i + 1]) > 6.5)
+        fluxes[i] = std::min(fluxes[i], 0.0);
+      if ((T[i] - T[i + 1]) > 7.0)
+      {
+        fluxes[i] -= 1000 * ((T[i] - T[i + 1]) - 7.0);
+      }
+      error += fluxes[i] * fluxes[i];
+    }
+    return error;
   }
 }
 

@@ -2,6 +2,9 @@
 #include <iterator>
 #include <cmath>
 
+#ifndef GREENHOUSE_CONFIG_H
+#define GREENHOUSE_CONFIG_H
+
 namespace Config
 {
   constexpr int NUM_G_POINTS = 16;
@@ -44,11 +47,11 @@ namespace Config
       0.0135762297058771,
   };
 
-  constexpr int NUM_BINS = 22;
+  constexpr int NUM_BINS = 16;
   constexpr double NU_START = 200;
-  constexpr double BIN_WIDTHS[NUM_BINS] = {150, 150, 50, 50, 30, 30, 30, 30, 30, 50, 50, 50, 50, 50, 50, 50, 50, 100, 100, 100, 150, 400};
+  constexpr double BIN_WIDTHS[] = {340, 150, 130, 70, 120, 160, 100, 100, 210, 90, 320, 280, 170, 130, 220, 650};
   constexpr double NU_STEP = 0.001;
-  constexpr int MAX_LBL_ENTRIES = 400000;
+  constexpr int MAX_LBL_ENTRIES = 650000;
 
 }
 
@@ -61,4 +64,11 @@ namespace PhysicsConstants
   constexpr double N_A = 6.02214076e23;    // Avogadro constant [mol^-1]
   constexpr double h = 6.62607015e-34;     // Planck constant [J s]
   constexpr double c2 = h * c / k_B * 100; // Second radiation constant [cm K]
+  constexpr double R = 8.314462618;        // Molar gas constant [J / K / mol]
+  constexpr double g = 9.80665;            // Gravitational acceleration on Earth's surface [m / s^2]
+  constexpr double R_E = 9.80665e6;        // Earth's radius [m]
+  constexpr double sigma = 5.670374419e-8; // Stefan-boltzmann constant [W / m^2 / K^4]
+  constexpr double atm = 101325;
 }
+
+#endif
