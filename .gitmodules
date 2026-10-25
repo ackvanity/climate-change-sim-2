@@ -7,3 +7,6 @@
 [submodule "dependencies/LBFGSpp"]
 	path = dependencies/LBFGSpp
 	url = https://github.com/yixuan/LBFGSpp
+[submodule "dependencies/eigen"]
+	path = dependencies/eigen
+	url = https://gitlab.com/libeigen/eigen.git
