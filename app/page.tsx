@@ -78,7 +78,7 @@ export default function Home() {
         <Collapsible heading="Introductory" className="flex flex-row flex-wrap">
           <Card
             title="Thermodynamics of Climate Change"
-            simulation="/simulations/climate"
+            simulation="/simulations/greenhouse"
           >
             <p>
               Lorem ipsum dolor sit amet consectetur adipisicing elit.

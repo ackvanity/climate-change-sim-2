@@ -50,3 +50,5 @@ config.json
 *.out
 # Windows
 *.exe
+# WASM build output
+/public/wasm/

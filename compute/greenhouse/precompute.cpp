@@ -2,6 +2,9 @@
 #include <bits/stdc++.h>
 #include "Faddeeva.hh"
 #include "config.h"
+#include "Eigen/Core"
+#include "LBFGSpp/LBFGS.h"
+#include "LBFGSpp/LBFGSB.h"
 #include <chrono>
 
 namespace CKD
@@ -296,6 +299,7 @@ namespace CKD
       start_nu += width;
     }
 
+    std::cout << "A" << std::endl;
     return result;
   }
 
@@ -638,7 +642,11 @@ namespace Greenhouse
     int logP_idx_1 = std::clamp(logP_idx_0 + 1, 0, 17);
 
     Transmission result;
-    memset(result.T, 0, sizeof result.T);
+    for (auto &t : result.T)
+    {
+      t = 1;
+    }
+
     double vmr_idx;
     int vmr_idx_0;
     int vmr_idx_1;
@@ -779,30 +787,33 @@ namespace Greenhouse
 
     for (int i = 0; i < T.size(); i++)
     {
-      {
-        Transmission transmission;
-        auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
-        auto transmission_co2 = compute_transmission(species_co2, T[i], P[i], 420e-6);
-        auto transmission_o3 = compute_transmission(species_o3, T[i], P[i], vmr_o3[i]);
-        auto transmission_n2o = compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]);
-        auto transmission_h2o = compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]);
+      Transmission transmission;
+      auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
+      auto transmission_co2 = compute_transmission(species_co2, T[i], P[i], 420e-6);
+      auto transmission_o3 = compute_transmission(species_o3, T[i], P[i], vmr_o3[i]);
+      auto transmission_n2o = compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]);
+      auto transmission_h2o = compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]);
 
-        auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
-        for (int bin = 0; bin < Config::NUM_BINS; bin++)
-        {
-          fluxes[i] -= transfer[bin];
-        }
-        for (int bin = 0; bin < Config::NUM_BINS; bin++)
-        {
-          transfer[bin] *= (1 - transmission.T[bin]);
-          transfer[bin] += planck[idx][bin];
-        }
+      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      {
+        transmission.T[bin] = transmission_ch4.T[bin] * transmission_co2.T[bin] * transmission_o3.T[bin] * transmission_n2o.T[bin] * transmission_h2o.T[bin];
+      }
+
+      auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      {
+        fluxes[i] -= transfer[bin];
+      }
+      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      {
+        transfer[bin] *= (1 - transmission.T[bin]);
+        transfer[bin] += planck[idx][bin];
       }
     }
 
     for (int bin = 0; bin < Config::NUM_BINS; bin++)
     {
-      fluxes[0] -= transfer[bin];
+      fluxes[T.size()] -= transfer[bin];
     }
 
     double error = 0;
@@ -819,15 +830,85 @@ namespace Greenhouse
     return error;
   }
 
+  using Eigen::VectorXd;
+  class RadiativeError
+  {
+  private:
+    int n;
+
+  public:
+    RadiativeError(int n_) : n(n_) {}
+    double operator()(const VectorXd &x, VectorXd &grad)
+    {
+      const double DELTA = 1.0;
+      std::vector<double> T;
+      for (int i = 0; i < n; i++)
+        T.push_back(x[i]);
+
+      double fx = compute_energy_error(T);
+
+      for (int i = 0; i < n; i++)
+      {
+        double original = T[i];
+        T[i] = original + DELTA;
+        double fp = compute_energy_error(T);
+        T[i] = original - DELTA;
+        double fm = compute_energy_error(T);
+        grad[i] = (fp - fm) / (2 * DELTA);
+        T[i] = original;
+      }
+
+      std::cerr << "LOOP" << " " << fx << " x = " << x.transpose() << std::endl;
+
+      return fx;
+    }
+  };
+
+  std::vector<double> solve_state(double co2, double ch4)
+  {
+    const int n = 81;
+
+    LBFGSpp::LBFGSBParam<double> param; // Use B-param for bounds
+    param.epsilon = 1e-6;
+    param.max_iterations = 100;
+
+    LBFGSpp::LBFGSBSolver<double> solver(param); // Use B-solver (L-BFGS-B)
+    RadiativeError error(n);
+
+    // Set strict physical box constraints for atmospheric temperatures
+    VectorXd lb = VectorXd::Constant(n, 150.0); // Minimum allowable temperature (150 K)
+    VectorXd ub = VectorXd::Constant(n, 400.0); // Maximum allowable temperature (400 K)
+
+    VectorXd x = VectorXd::Constant(n, 300.0);
+    double fx;
+
+    try
+    {
+      int niter = solver.minimize(error, x, fx, lb, ub); // Pass bounds here!
+      std::cout << niter << " iterations" << std::endl;
+      std::cout << "f(x) = " << fx << std::endl;
+    }
+    catch (std::exception &e)
+    {
+      std::cerr << "Optimizer error: " << e.what() << std::endl;
+    }
+
+    return {};
+  }
+
   void init()
   {
     compute_planck();
     compute_afgl();
+    solve_state(-1, -1);
   }
+
 }
 
+#ifndef GREENHOUSE_AS_LIBRARY // defined by interface/greenhouse/src/greenhouse_wasm.cpp
 int main()
 {
   // CKD::compute_ckd();
   Greenhouse::init();
 }
+#endif

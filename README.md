@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Climate Change Simulations
 
-## Getting Started
+An interactive, educational web demo of how greenhouse gases (CO₂, H₂O, CH₄, N₂O, O₃) shape Earth's atmospheric temperature, built on line-by-line radiative transfer rather than a toy model.
 
-First, run the development server:
+## Structure
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+compute/<project>/            Offline C++/Python physics (not used by the UI directly)
+  greenhouse/                   HITRAN → correlated-k tables → radiative-equilibrium solver
+  grid/                         Circuit-simulation prototype
+interface/<project>/          WASM bridge between compute and UI (C ABI + TypeScript binding)
+  greenhouse/
+app/simulations/<project>/    Next.js simulation pages
+  greenhouse/
+app/, components/             Landing page, shared UI components
+dependencies/                 Git submodules (Eigen, LBFGSpp, cpp-terminal, AFGL-1986 data),
+                              symlinked into the projects that use them
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Every project keeps its code in its own subfolder under `compute/`, `interface/` and `app/simulations/`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Pipeline: `export_data.py` downloads HITRAN spectroscopy → `precompute.cpp` builds binary correlated-k tables in `compute/greenhouse/precompute_bin/` → `interface/greenhouse/build.sh` compiles the solver and tables to WASM in `public/wasm/greenhouse/` → the UI loads it through `interface/greenhouse/greenhouse.ts`. See [`interface/greenhouse/README.md`](interface/greenhouse/README.md).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Getting started
 
-## Learn More
+```bash
+git submodule update --init --recursive
+pnpm install
+pnpm dev            # http://localhost:3000
+```
 
-To learn more about Next.js, take a look at the following resources:
+To build the WASM module (requires the [Emscripten SDK](https://emscripten.org/)):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+./interface/greenhouse/build.sh
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+To regenerate the spectroscopic tables (slow, about 4 hours on a 12-core CPU), run from `compute/greenhouse/`:
 
-## Deploy on Vercel
+```bash
+python export_data.py        # needs the hapi package and a HITRAN API key
+g++ --std=c++20 -O3 -pthread -I. precompute.cpp Faddeeva.cc -o precompute && ./precompute
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Status
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Work in progress. The correlated-k precomputation is complete; the equilibrium solver is unfinished and the simulation page is still an empty layout shell.
+
+Design tokens and the colour rationale are in [`DESIGN.md`](DESIGN.md).
