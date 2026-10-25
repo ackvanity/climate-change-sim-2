@@ -4,20 +4,6 @@
 #include "config.h"
 #include <chrono>
 
-// slight coupling between CKD and atmospheric namespaces
-
-const CKD::Species species_co2("CO2", 44.01);
-const CKD::Species species_h2o("H2O", 18.015);
-const CKD::Species species_o3("O3", 47.997);
-const CKD::Species species_ch4("CH4", 16.04);
-const CKD::Species species_n2o("N2O", 44.013);
-
-CKD::Binning result_co2[15 * 18 * 11];
-CKD::Binning result_h2o[15 * 18 * 16];
-CKD::Binning result_o3[15 * 18 * 11];
-CKD::Binning result_ch4[15 * 18 * 11];
-CKD::Binning result_n2o[15 * 18 * 11];
-
 namespace CKD
 {
 
@@ -37,7 +23,9 @@ namespace CKD
     double S_T;
     double y;
 
-    LineCompute(double nu, double S_T, double y) : nu(nu), S_T(S_T), y(y) {}
+    LineCompute(double nu, double S_T, double y) : nu(nu), S_T(S_T), y(y)
+    {
+    }
   };
 
   struct CKD
@@ -56,8 +44,9 @@ namespace CKD
     double molar_mass_g_mol;
     std::vector<Line> lines;
     std::vector<double> Q;
+    Binning *result;
 
-    Species(std::string gas_name, double molar_mass)
+    Species(std::string gas_name, double molar_mass, Binning *result) : result(result)
     {
       molar_mass_g_mol = molar_mass;
       name = gas_name;
@@ -91,7 +80,8 @@ namespace CKD
       }
     }
 
-    [[nodiscard]] double molecular_mass_kg() const
+    [[nodiscard]] double
+    molecular_mass_kg() const
     {
       return (molar_mass_g_mol / 1000.0) / PhysicsConstants::N_A;
     }
@@ -158,7 +148,24 @@ namespace CKD
 #error "An invalid value for VOIGT_PROFILE_TEST_ACCURACY has been set. Valid values are -1, 0, 1, and 2"
 #endif
   }
+};
 
+// slight coupling between CKD and atmospheric namespaces
+
+CKD::Binning result_co2[15 * 18 * 11];
+CKD::Binning result_h2o[15 * 18 * 16];
+CKD::Binning result_o3[15 * 18 * 11];
+CKD::Binning result_ch4[15 * 18 * 11];
+CKD::Binning result_n2o[15 * 18 * 11];
+
+const CKD::Species species_co2("CO2", 44.01, result_co2);
+const CKD::Species species_h2o("H2O", 18.015, result_h2o);
+const CKD::Species species_o3("O3", 47.997, result_o3);
+const CKD::Species species_ch4("CH4", 16.04, result_ch4);
+const CKD::Species species_n2o("N2O", 44.013, result_n2o);
+
+namespace CKD
+{
   Binning compute_ckd(const Species &species, double T, double P, double mixing_ratio = 0)
   {
     const double INV_SQRT_PI = 1.0 / std::sqrt(M_PI);
@@ -475,21 +482,6 @@ namespace CKD
     run_tasks();
     save_data("precompute_bin/N2O_transmission.bin", result_n2o, sizeof result_n2o);
 
-    // std::random_device rd;
-    // std::mt19937_64 mt(rd());
-    // std::vector<int> tmp;
-    // for (auto i : tasks)
-    //   tmp.push_back(tmp.size());
-    // std::shuffle(tmp.begin(), tmp.end(), mt);
-    // std::vector<Workload> vec;
-    // for (int i = 0; i < tmp.size(); i++)
-    // {
-    //   vec.push_back(tasks[tmp[i]]);
-    // }
-    // swap(vec, tasks);
-    // vec.clear();
-    // tmp.clear();
-
     watcher.request_stop();
     watcher.join();
   }
@@ -504,6 +496,12 @@ namespace Greenhouse
   constexpr int NUM_SLABS = 80;
   constexpr double h = 1000; // 1 km slabs
 
+  // header: z,p,t,n,H2O,O3,N2O,CO,CH4
+  std::vector<std::vector<double>> afgl; // AFGL standard data, interpolated
+  std::vector<double> vmr_o3;
+  std::vector<double> vmr_n2o;
+  std::vector<double> rh_h2o;
+
   struct Transmission
   {
     double T[Config::NUM_BINS];
@@ -512,6 +510,75 @@ namespace Greenhouse
   double planck[NUM_PLANCK_POINTS][Config::NUM_BINS]; // [T_idx][bins] where T = T_idx + PLANCK_POINTS_START
 
   double S0[Config::NUM_BINS];
+
+  double compute_water_saturation(double T)
+  {
+    T -= 273.15; // conver to Celsius
+    if (T >= 0.0)
+    {
+      return (610.78 / PhysicsConstants::atm) * std::exp(17.27 * T / (T + 237.3));
+    }
+    else
+    {
+      return (610.78 / PhysicsConstants::atm) * std::exp(21.875 * T / (T + 265.5));
+    }
+  }
+
+  void compute_afgl()
+  {
+    std::vector<std::vector<double>> afgl_raw; // Raw AFGL data
+
+    std::ifstream file("afgl-1986/1f.csv");
+
+    if (!file.is_open())
+    {
+      throw std::runtime_error("Cannot open AFGL table!");
+    }
+
+    std::string line;
+    std::getline(file, line);
+
+    while (std::getline(file, line))
+    {
+      std::stringstream ss(line);
+      double tmp;
+      afgl_raw.push_back({});
+      while (ss >> tmp)
+      {
+        char c;
+        ss >> c; // for the semicolon
+        afgl_raw.back().push_back(tmp);
+        // std::cout << tmp << " ";
+      }
+      // std::cout << std::endl;
+    }
+
+    int idx = 0;
+    for (int z = 0; z <= 120; z++)
+    {
+      while ((idx + 1) < afgl_raw.size() && afgl_raw[idx + 1][0] <= z)
+      {
+        idx++;
+      }
+      if (idx == (afgl_raw.size() - 1))
+      {
+        afgl.push_back(afgl_raw[idx]);
+      }
+      else
+      {
+        afgl.push_back({});
+        double ratio = ((double)z - afgl_raw[idx][0]) / (afgl_raw[idx + 1][0] - afgl_raw[idx][0]);
+        for (int i = 0; i < afgl_raw[idx].size(); i++)
+        {
+          afgl.back().push_back(std::lerp(afgl_raw[idx][i], afgl_raw[idx + 1][i], ratio));
+        }
+      }
+      vmr_o3.push_back(afgl.back()[5] * 1e-6);
+      vmr_n2o.push_back(afgl.back()[6] * 1e-6);
+      rh_h2o.push_back((afgl.back()[4] * 1e-6) * afgl.back()[1] * (100 / PhysicsConstants::atm) / compute_water_saturation(afgl.back()[2]));
+      // std::cout << std::setw(15) << std::scientific << std::setprecision(4) << vmr_o3.back() << "\t" << std::setw(15) << std::scientific << std::setprecision(4) << vmr_n2o.back() << "\t" << std::setw(15) << std::scientific << std::setprecision(4) << rh_h2o.back() << "\t" << std::setw(15) << std::scientific << std::setprecision(4) << compute_water_saturation(afgl.back()[2]) << std::endl;
+    }
+  }
 
   void compute_planck()
   {
@@ -534,9 +601,9 @@ namespace Greenhouse
 
         nu = nu_end;
         planck[T_idx][bin_idx] = integral;
-        std::cout << integral << " ";
+        // std::cout << integral << " ";
       }
-      std::cout << std::endl;
+      // std::cout << std::endl;
     }
 
     double T = 5778;
@@ -557,7 +624,7 @@ namespace Greenhouse
       nu = nu_end;
       S0[bin_idx] = integral / (PhysicsConstants::sigma * T * T * T * T) * 1361;
     }
-    std::cout << std::endl;
+    // std::cout << std::endl;
   }
 
   Transmission compute_transmission(CKD::Species species, double T, double P, double vmr)
@@ -571,6 +638,7 @@ namespace Greenhouse
     int logP_idx_1 = std::clamp(logP_idx_0 + 1, 0, 17);
 
     Transmission result;
+    memset(result.T, 0, sizeof result.T);
     double vmr_idx;
     int vmr_idx_0;
     int vmr_idx_1;
@@ -605,8 +673,13 @@ namespace Greenhouse
     if (species.name == "N2O")
     {
       vmr_idx = (vmr / 1e-7 - 1) / 0.4;
+
       vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 10);
       vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
+    }
+    if (vmr_idx <= -0.2) // gas is virtually non-existent
+    {
+      return result;
     }
 
 #define IDX(T, P, vmr) (T + 15 * (P + 18 * vmr))
@@ -615,10 +688,10 @@ namespace Greenhouse
       result.T[bin] = 0;
       for (int point = 0; point < Config::NUM_G_POINTS; point++)
       {
-        double c00 = std::lerp(result_co2[IDX(T_idx_0, logP_idx_0, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_0, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
-        double c01 = std::lerp(result_co2[IDX(T_idx_0, logP_idx_1, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_0, logP_idx_1, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
-        double c10 = std::lerp(result_co2[IDX(T_idx_1, logP_idx_0, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_1, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
-        double c11 = std::lerp(result_co2[IDX(T_idx_1, logP_idx_1, vmr_idx_0)].bins[bin].k[point], result_co2[IDX(T_idx_1, logP_idx_1, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c00 = std::lerp(species.result[IDX(T_idx_0, logP_idx_0, vmr_idx_0)].bins[bin].k[point], species.result[IDX(T_idx_0, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c01 = std::lerp(species.result[IDX(T_idx_0, logP_idx_1, vmr_idx_0)].bins[bin].k[point], species.result[IDX(T_idx_0, logP_idx_1, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c10 = std::lerp(species.result[IDX(T_idx_1, logP_idx_0, vmr_idx_0)].bins[bin].k[point], species.result[IDX(T_idx_1, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
+        double c11 = std::lerp(species.result[IDX(T_idx_1, logP_idx_1, vmr_idx_0)].bins[bin].k[point], species.result[IDX(T_idx_1, logP_idx_1, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
 
         double c0 = std::lerp(c00, c01, std::clamp(logP_idx - logP_idx_0, 0.0, 1.0));
         double c1 = std::lerp(c10, c11, std::clamp(logP_idx - logP_idx_0, 0.0, 1.0));
@@ -632,7 +705,7 @@ namespace Greenhouse
 #undef IDX
   }
 
-  // convention: Earth's temperature dead last
+  // convention: Earth's temperature dead last, lowest height first
   double compute_energy_error(std::vector<double> T)
   {
     const double T_E = T.back();
@@ -653,7 +726,6 @@ namespace Greenhouse
       y += h;
     }
     P.pop_back();
-    return 0.0;
 
     // Code a subroutine to get transmission coefficients from before.
     // Calculate energy fluxes going into and out of each gas
@@ -667,8 +739,16 @@ namespace Greenhouse
     for (int i = (T.size() - 1); i >= 0; i--)
     {
       Transmission transmission;
-      memset(transmission.T, 0, sizeof transmission.T);
       auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
+      auto transmission_co2 = compute_transmission(species_co2, T[i], P[i], 420e-6);
+      auto transmission_o3 = compute_transmission(species_o3, T[i], P[i], vmr_o3[i]);
+      auto transmission_n2o = compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]);
+      auto transmission_h2o = compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]);
+
+      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      {
+        transmission.T[bin] = transmission_ch4.T[bin] * transmission_co2.T[bin] * transmission_o3.T[bin] * transmission_n2o.T[bin] * transmission_h2o.T[bin];
+      }
 
       auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
       for (int bin = 0; bin < Config::NUM_BINS; bin++)
@@ -700,8 +780,13 @@ namespace Greenhouse
     for (int i = 0; i < T.size(); i++)
     {
       {
-        auto transmission = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
-        auto tmp = compute_transmission(species_co2, T[i], P[i], 422e-6);
+        Transmission transmission;
+        auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
+        auto transmission_co2 = compute_transmission(species_co2, T[i], P[i], 420e-6);
+        auto transmission_o3 = compute_transmission(species_o3, T[i], P[i], vmr_o3[i]);
+        auto transmission_n2o = compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]);
+        auto transmission_h2o = compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]);
+
         auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
         for (int bin = 0; bin < Config::NUM_BINS; bin++)
         {
@@ -733,10 +818,16 @@ namespace Greenhouse
     }
     return error;
   }
+
+  void init()
+  {
+    compute_planck();
+    compute_afgl();
+  }
 }
 
 int main()
 {
-  CKD::compute_ckd();
-  // Greenhouse::compute_planck();
+  // CKD::compute_ckd();
+  Greenhouse::init();
 }
