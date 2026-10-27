@@ -13,7 +13,8 @@ compute/greenhouse/  --(include)-->  src/greenhouse_wasm.cpp  --(emcc, build.sh)
 
 - `src/greenhouse_wasm.cpp` — C ABI over the solver in `compute/greenhouse/precompute.cpp`.
 - `build.sh` — Emscripten build. Bundles `precompute_bin/` and the AFGL table into `greenhouse.data`.
-- `greenhouse.ts` — `loadGreenhouse()` returns `{ solve(co2Ppm, ch4Ppm) }`.
+- `greenhouse.ts` — `loadGreenhouse()` returns `{ solve(co2Ppm, ch4Ppm) }`, plus layer constants (`NUM_LAYERS`, `layerAltitudesKm`) and `summarize()` for the macro properties (CO₂, CH₄, mean atmosphere T, surface T).
+- `mock.ts` — `mockGreenhouse`, a parametrised stand-in with the same `solve()` contract. The UI falls back to it while the real solver is unfinished or the WASM is not built. It is not the radiative-equilibrium physics.
 
 ## C ABI
 

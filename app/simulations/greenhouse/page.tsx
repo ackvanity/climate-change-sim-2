@@ -1,13 +1,5 @@
-import { Simulation } from '@/components/simulation';
+import { GreenhouseView } from './greenhouse-view';
 
 export default function Climate() {
-  return (
-    <Simulation>
-      <Simulation.Heading title="Thermodynamics of Climate Change"></Simulation.Heading>
-      <Simulation.Main>
-        <Simulation.Sidebar></Simulation.Sidebar>
-      </Simulation.Main>
-      <Simulation.Footer></Simulation.Footer>
-    </Simulation>
-  );
+  return <GreenhouseView />;
 }

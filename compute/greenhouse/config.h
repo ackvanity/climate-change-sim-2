@@ -52,7 +52,6 @@ namespace Config
   constexpr double BIN_WIDTHS[] = {340, 150, 130, 70, 120, 160, 100, 100, 210, 90, 320, 280, 170, 130, 220, 650};
   constexpr double NU_STEP = 0.001;
   constexpr int MAX_LBL_ENTRIES = 650000;
-
 }
 
 namespace PhysicsConstants

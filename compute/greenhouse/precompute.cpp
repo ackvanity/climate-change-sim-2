@@ -2,9 +2,7 @@
 #include <bits/stdc++.h>
 #include "Faddeeva.hh"
 #include "config.h"
-#include "Eigen/Core"
-#include "LBFGSpp/LBFGS.h"
-#include "LBFGSpp/LBFGSB.h"
+#include "Eigen/Dense"
 #include <chrono>
 
 namespace CKD
@@ -494,11 +492,14 @@ namespace CKD
 
 namespace Greenhouse
 {
-  constexpr int NUM_PLANCK_POINTS = 3000;
+  constexpr int NUM_PLANCK_POINTS = 30000;
   constexpr int PLANCK_POINTS_START = 150;
-  constexpr double PLANCK_POINTS_STEP = 0.05;
+  constexpr double PLANCK_POINTS_STEP = 0.01;
   constexpr int NUM_SLABS = 80;
   constexpr double h = 1000; // 1 km slabs
+  double OZONE_SHARE = 0.1;
+  double OZONE_TAU = 0.5;
+  double SOLAR_LONGWAVE = 280;
 
   // header: z,p,t,n,H2O,O3,N2O,CO,CH4
   std::vector<std::vector<double>> afgl; // AFGL standard data, interpolated
@@ -508,7 +509,7 @@ namespace Greenhouse
 
   struct Transmission
   {
-    double T[Config::NUM_BINS];
+    double T[Config::NUM_BINS][Config::NUM_G_POINTS];
   };
 
   double planck[NUM_PLANCK_POINTS][Config::NUM_BINS]; // [T_idx][bins] where T = T_idx + PLANCK_POINTS_START
@@ -598,7 +599,7 @@ namespace Greenhouse
         for (int g_idx = 0; g_idx < Config::NUM_G_POINTS; g_idx++) // Reuse Gaussian quadrature data from CKD
         {
           double f = (nu_start + (nu_end - nu_start) * Config::G_NODES[g_idx]) * PhysicsConstants::c * 100; // interpolate and convert from cm-1 to Hz
-          integral += Config::G_WEIGHTS[g_idx] * 2 * PhysicsConstants::h * pow(f, 3) / (pow(PhysicsConstants::c, 2) * (std::exp(PhysicsConstants::h * f / (PhysicsConstants::k_B * T)) - 1));
+          integral += M_PI * Config::G_WEIGHTS[g_idx] * 2 * PhysicsConstants::h * pow(f, 3) / (pow(PhysicsConstants::c, 2) * (std::exp(PhysicsConstants::h * f / (PhysicsConstants::k_B * T)) - 1));
           // integral += Config::G_WEIGHTS[g_idx] * 2;
         }
         integral *= (nu_end - nu_start) * PhysicsConstants::c * 100; // cm-1 to Hz
@@ -620,18 +621,18 @@ namespace Greenhouse
       for (int g_idx = 0; g_idx < Config::NUM_G_POINTS; g_idx++) // Reuse Gaussian quadrature data from CKD
       {
         double f = (nu_start + (nu_end - nu_start) * Config::G_NODES[g_idx]) * PhysicsConstants::c * 100; // interpolate and convert from cm-1 to Hz
-        integral += Config::G_WEIGHTS[g_idx] * 2 * PhysicsConstants::h * pow(f, 3) / (pow(PhysicsConstants::c, 2) * (std::exp(PhysicsConstants::h * f / (PhysicsConstants::k_B * T)) - 1));
+        integral += M_PI * Config::G_WEIGHTS[g_idx] * 2 * PhysicsConstants::h * pow(f, 3) / (pow(PhysicsConstants::c, 2) * (std::exp(PhysicsConstants::h * f / (PhysicsConstants::k_B * T)) - 1));
         // integral += Config::G_WEIGHTS[g_idx] * 2;
       }
       integral *= (nu_end - nu_start) * PhysicsConstants::c * 100; // cm-1 to Hz
 
       nu = nu_end;
-      S0[bin_idx] = integral / (PhysicsConstants::sigma * T * T * T * T) * 1361;
+      S0[bin_idx] = integral / (PhysicsConstants::sigma * T * T * T * T) * 1361 / 4;
     }
     // std::cout << std::endl;
   }
 
-  Transmission compute_transmission(CKD::Species species, double T, double P, double vmr)
+  Transmission compute_transmission(const CKD::Species &species, double T, double P, double vmr)
   {
     double T_idx = T / 10.0 - 18;
     int T_idx_0 = std::clamp((static_cast<int>(T_idx)), 0, 14);
@@ -644,7 +645,7 @@ namespace Greenhouse
     Transmission result;
     for (auto &t : result.T)
     {
-      t = 1;
+      std::fill(std::begin(t), std::end(t), 1.0);
     }
 
     double vmr_idx;
@@ -685,15 +686,11 @@ namespace Greenhouse
       vmr_idx_0 = std::clamp((static_cast<int>(vmr_idx)), 0, 10);
       vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
     }
-    if (vmr_idx <= -0.2) // gas is virtually non-existent
-    {
-      return result;
-    }
 
+    memset(result.T, sizeof result.T, 0);
 #define IDX(T, P, vmr) (T + 15 * (P + 18 * vmr))
     for (int bin = 0; bin < Config::NUM_BINS; bin++)
     {
-      result.T[bin] = 0;
       for (int point = 0; point < Config::NUM_G_POINTS; point++)
       {
         double c00 = std::lerp(species.result[IDX(T_idx_0, logP_idx_0, vmr_idx_0)].bins[bin].k[point], species.result[IDX(T_idx_0, logP_idx_0, vmr_idx_1)].bins[bin].k[point], std::clamp(vmr_idx - vmr_idx_0, 0.0, 1.0));
@@ -706,15 +703,49 @@ namespace Greenhouse
 
         double c = std::lerp(c0, c1, std::clamp(T_idx - T_idx_0, 0.0, 1.0));
 
-        result.T[bin] += std::exp(-c * h) * Config::G_WEIGHTS[point];
+        result.T[bin][point] = std::exp(-1.66 * c * vmr * (PhysicsConstants::N_A * (P * PhysicsConstants::atm) / (PhysicsConstants::R * T * 1e6)) * h * 100);
       }
     }
     return result;
 #undef IDX
   }
 
+  Transmission merge_transmission(Transmission a, Transmission b)
+  {
+    Transmission c;
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      std::pair<double, double> arr[Config::NUM_G_POINTS * Config::NUM_G_POINTS];
+      for (int a_idx = 0; a_idx < Config::NUM_G_POINTS; a_idx++)
+      {
+        for (int b_idx = 0; b_idx < Config::NUM_G_POINTS; b_idx++)
+        {
+          arr[a_idx * 16 + b_idx] = {a.T[bin][a_idx] * b.T[bin][b_idx], Config::G_WEIGHTS[a_idx] * Config::G_WEIGHTS[b_idx]};
+        }
+      }
+      std::sort(std::begin(arr), std::end(arr));
+      int ab_idx = 0;
+      for (int c_idx = 0; c_idx < Config::NUM_G_POINTS; c_idx++)
+      {
+        double target = Config::G_WEIGHTS[c_idx];
+        c.T[bin][c_idx] = 0;
+        while (target > 1e-15 && ab_idx < 256)
+        {
+          double take = std::min(target, arr[ab_idx].second);
+          c.T[bin][c_idx] += take * arr[ab_idx].first;
+          target -= take;
+          arr[ab_idx].second -= take;
+          if (arr[ab_idx].second <= 1e-15)
+            ab_idx++;
+        }
+        c.T[bin][c_idx] /= Config::G_WEIGHTS[c_idx];
+      }
+    }
+    return c;
+  }
+
   // convention: Earth's temperature dead last, lowest height first
-  double compute_energy_error(std::vector<double> T)
+  std::vector<double> compute_energy_error(std::vector<double> T, double co2, double ch4)
   {
     const double T_E = T.back();
     const double albedo = 0.3;
@@ -729,8 +760,8 @@ namespace Greenhouse
 
     for (auto t : T)
     {
-      rho.push_back(P.back() * mr_air / (PhysicsConstants::R * t));
-      P.push_back(P.back() - rho.back() * (PhysicsConstants::g * (PhysicsConstants::R_E * PhysicsConstants::R_E) / ((PhysicsConstants::R_E + y) * (PhysicsConstants::R_E + y))) / PhysicsConstants::atm);
+      rho.push_back(P.back() * PhysicsConstants::atm * mr_air / (PhysicsConstants::R * t));
+      P.push_back(P.back() - rho.back() * (PhysicsConstants::g * (PhysicsConstants::R_E * PhysicsConstants::R_E) / ((PhysicsConstants::R_E + y) * (PhysicsConstants::R_E + y))) * h / PhysicsConstants::atm);
       y += h;
     }
     P.pop_back();
@@ -741,166 +772,293 @@ namespace Greenhouse
     // Lapse rates (so find the net flux on EACH BOUNDARY
     std::vector<double> fluxes; // going from layer i down to i-1 is positive, else negative
     fluxes.resize(T.size() + 1);
-    double transfer[Config::NUM_BINS];
-    memcpy(transfer, S0, sizeof transfer);
+    double transfer[Config::NUM_BINS][Config::NUM_G_POINTS];
+    for (int bin = 0; bin < Config::NUM_BINS; bin++)
+    {
+      for (int point = 0; point < Config::NUM_G_POINTS; point++)
+      {
+        transfer[bin][point] = S0[bin];
+      }
+    }
 
     for (int i = (T.size() - 1); i >= 0; i--)
     {
       Transmission transmission;
-      auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
-      auto transmission_co2 = compute_transmission(species_co2, T[i], P[i], 420e-6);
-      auto transmission_o3 = compute_transmission(species_o3, T[i], P[i], vmr_o3[i]);
-      auto transmission_n2o = compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]);
-      auto transmission_h2o = compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]);
-
-      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      for (auto &t : transmission.T)
       {
-        transmission.T[bin] = transmission_ch4.T[bin] * transmission_co2.T[bin] * transmission_o3.T[bin] * transmission_n2o.T[bin] * transmission_h2o.T[bin];
+        std::fill(std::begin(t), std::end(t), 1.0);
       }
+      transmission = merge_transmission(transmission, compute_transmission(species_ch4, T[i], P[i], ch4));
+      transmission = merge_transmission(transmission, compute_transmission(species_co2, T[i], P[i], co2));
+      transmission = merge_transmission(transmission, compute_transmission(species_o3, T[i], P[i], vmr_o3[i]));
+      transmission = merge_transmission(transmission, compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]));
+      transmission = merge_transmission(transmission, compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]));
 
-      auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+      auto idx1 = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+      auto idx2 = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP + 1, 0, NUM_PLANCK_POINTS - 1);
+      auto w = (T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP - idx1;
       for (int bin = 0; bin < Config::NUM_BINS; bin++)
       {
-        fluxes[i + 1] += transfer[bin];
+        for (int point = 0; point < Config::NUM_G_POINTS; point++)
+        {
+          fluxes[i + 1] += transfer[bin][point] * Config::G_WEIGHTS[point];
+        }
       }
       for (int bin = 0; bin < Config::NUM_BINS; bin++)
       {
-        transfer[bin] *= (1 - transmission.T[bin]);
-        transfer[bin] += planck[idx][bin];
+        for (int point = 0; point < Config::NUM_G_POINTS; point++)
+        {
+          transfer[bin][point] *= transmission.T[bin][point];
+          transfer[bin][point] += (1 - transmission.T[bin][point]) * (planck[idx1][bin] + (planck[idx2][bin] - planck[idx1][bin]) * w);
+        }
       }
     }
 
-    auto idx_E = std::clamp<int>((T_E - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+    auto idx_E1 = std::clamp<int>((T_E - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+    auto idx_E2 = std::clamp<int>((T_E - PLANCK_POINTS_START) / PLANCK_POINTS_STEP + 1, 0, NUM_PLANCK_POINTS - 1);
+    auto w = ((T_E - PLANCK_POINTS_START) / PLANCK_POINTS_STEP) - idx_E1;
 
     for (int bin = 0; bin < Config::NUM_BINS; bin++)
     {
-      fluxes[0] += transfer[bin];
+      for (int point = 0; point < Config::NUM_G_POINTS; point++)
+      {
+        fluxes[0] += transfer[bin][point] * Config::G_WEIGHTS[point];
+      }
     }
     for (int bin = 0; bin < Config::NUM_BINS; bin++)
     {
-      transfer[bin] *= albedo;
-    }
-    for (int bin = 0; bin < Config::NUM_BINS; bin++)
-    {
-      transfer[bin] += planck[idx_E][bin];
+      for (int point = 0; point < Config::NUM_G_POINTS; point++)
+      {
+        transfer[bin][point] *= (bin >= 13 ? albedo : 0);
+        transfer[bin][point] += (planck[idx_E1][bin] + (planck[idx_E2][bin] - planck[idx_E1][bin]) * w) * (1 - (bin >= 13 ? albedo : 0));
+      }
     }
 
     for (int i = 0; i < T.size(); i++)
     {
       Transmission transmission;
-      auto transmission_ch4 = compute_transmission(species_ch4, T[i], P[i], 1.93e-6);
-      auto transmission_co2 = compute_transmission(species_co2, T[i], P[i], 420e-6);
-      auto transmission_o3 = compute_transmission(species_o3, T[i], P[i], vmr_o3[i]);
-      auto transmission_n2o = compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]);
-      auto transmission_h2o = compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]);
-
-      for (int bin = 0; bin < Config::NUM_BINS; bin++)
+      for (auto &t : transmission.T)
       {
-        transmission.T[bin] = transmission_ch4.T[bin] * transmission_co2.T[bin] * transmission_o3.T[bin] * transmission_n2o.T[bin] * transmission_h2o.T[bin];
+        std::fill(std::begin(t), std::end(t), 1.0);
       }
+      transmission = merge_transmission(transmission, compute_transmission(species_ch4, T[i], P[i], ch4));
+      transmission = merge_transmission(transmission, compute_transmission(species_co2, T[i], P[i], co2));
+      transmission = merge_transmission(transmission, compute_transmission(species_o3, T[i], P[i], vmr_o3[i]));
+      transmission = merge_transmission(transmission, compute_transmission(species_n2o, T[i], P[i], vmr_n2o[i]));
+      transmission = merge_transmission(transmission, compute_transmission(species_h2o, T[i], P[i], rh_h2o[i] * compute_water_saturation(T[i]) / P[i]));
 
-      auto idx = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+      auto idx1 = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP, 0, NUM_PLANCK_POINTS - 1);
+      auto idx2 = std::clamp<int>((T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP + 1, 0, NUM_PLANCK_POINTS - 1);
+      auto w = (T[i] - PLANCK_POINTS_START) / PLANCK_POINTS_STEP - idx1;
       for (int bin = 0; bin < Config::NUM_BINS; bin++)
       {
-        fluxes[i] -= transfer[bin];
+        for (int point = 0; point < Config::NUM_G_POINTS; point++)
+        {
+          fluxes[i] -= transfer[bin][point] * Config::G_WEIGHTS[point];
+        }
       }
       for (int bin = 0; bin < Config::NUM_BINS; bin++)
       {
-        transfer[bin] *= (1 - transmission.T[bin]);
-        transfer[bin] += planck[idx][bin];
+        for (int point = 0; point < Config::NUM_G_POINTS; point++)
+        {
+          transfer[bin][point] *= transmission.T[bin][point];
+          transfer[bin][point] += (1 - transmission.T[bin][point]) * (planck[idx1][bin] + (planck[idx2][bin] - planck[idx1][bin]) * w);
+        }
       }
     }
 
     for (int bin = 0; bin < Config::NUM_BINS; bin++)
     {
-      fluxes[T.size()] -= transfer[bin];
-    }
-
-    double error = 0;
-    for (int i = 0; i < T.size(); i++)
-    {
-      if ((T[i] - T[i + 1]) > 6.5)
-        fluxes[i] = std::min(fluxes[i], 0.0);
-      if ((T[i] - T[i + 1]) > 7.0)
+      for (int point = 0; point < Config::NUM_G_POINTS; point++)
       {
-        fluxes[i] -= 1000 * ((T[i] - T[i + 1]) - 7.0);
+        fluxes[T.size()] -= transfer[bin][point] * Config::G_WEIGHTS[point];
       }
-      error += fluxes[i] * fluxes[i];
     }
-    return error;
+    // for (int idx = fluxes.size() - 1; idx >= 0; idx--)
+    // {
+    //   std::cout << idx << " " << fluxes[idx] << std::endl;
+    // }
+    // std::cout << "TRANS\n";
+    // std::vector<double> energy;
+    for (int idx = fluxes.size() - 1; idx > 0; idx--)
+    {
+      fluxes[idx] -= fluxes[idx - 1];
+      // std::cout << idx << " " << fluxes[idx] << std::endl;
+    }
+    fluxes[0] += SOLAR_LONGWAVE * (1 - OZONE_SHARE);
+    double total = 0;
+    double dist = 0;
+    for (int idx = fluxes.size() - 1; idx > 0; idx--)
+    {
+      double delta = OZONE_TAU * vmr_o3[idx] * P[idx] / T[idx];
+      total += delta;
+    }
+    total = 1 - std::exp(-total);
+    for (int idx = fluxes.size() - 1; idx > 0; idx--)
+    {
+      double delta = OZONE_TAU * vmr_o3[idx];
+      double share = (std::exp(-dist) - std::exp(-dist - delta)) / total;
+      fluxes[idx] += SOLAR_LONGWAVE * OZONE_SHARE * share;
+    }
+    T.insert(T.begin(), T_E);
+    for (int idx = 0; idx <= (fluxes.size() - 2); idx++)
+    {
+
+      double delta = (T[idx] - T[idx + 1] - 6.5);
+      const double w = 0.3;
+      double F = 300 * ((delta < 0) ? 0 : ((delta > w) ? (delta - w * 0.5) : (delta * delta / (w * 2))));
+
+      if (F > 0)
+        fluxes[idx + 1] += F, fluxes[idx] -= F;
+    }
+    return fluxes;
   }
 
-  using Eigen::VectorXd;
-  class RadiativeError
+  void load_data(std::string fname, void *ptr, int size)
   {
-  private:
-    int n;
+    std::ifstream file(fname);
+    if (!file.is_open())
+      throw std::runtime_error("Cannot read file " + fname);
 
-  public:
-    RadiativeError(int n_) : n(n_) {}
-    double operator()(const VectorXd &x, VectorXd &grad)
+    file.read(reinterpret_cast<char *>(ptr), size);
+  }
+
+  void fit_params()
+  {
+    // params are
+    // SOLAR_LONGWAVE;
+    // OZONE_SHARE;
+    // OZONE_TAU;
+
+    double min_err = 1e10;
+    double min_solar_longwave = 0;
+    double min_ozone_share = 0;
+    double min_ozone_tau = 0;
+    constexpr int n = 81;
+
+    Eigen::VectorXd T(n);
+    for (int i = 0; i < (n - 1); i++)
+      T[i] = afgl[i + 1][2];
+    T[n - 1] = afgl[0][2];
+    auto residual = [](const Eigen::VectorXd &x)
     {
-      const double DELTA = 1.0;
-      std::vector<double> T;
-      for (int i = 0; i < n; i++)
-        T.push_back(x[i]);
+      std::vector<double> T(x.data(), x.data() + x.size());
+      std::vector<double> E = compute_energy_error(T, 330e-6, 1.93e-6);
+      E.push_back(E[0]);
+      E.erase(E.begin());
+      return Eigen::VectorXd(Eigen::Map<Eigen::VectorXd>(E.data(), E.size()));
+    };
 
-      double fx = compute_energy_error(T);
-
-      for (int i = 0; i < n; i++)
+    for (float solar_longwave = 200; solar_longwave < 300; solar_longwave += 10)
+    {
+      for (float ozone_share = 0.10; ozone_share < 0.50; ozone_share += 0.05)
       {
-        double original = T[i];
-        T[i] = original + DELTA;
-        double fp = compute_energy_error(T);
-        T[i] = original - DELTA;
-        double fm = compute_energy_error(T);
-        grad[i] = (fp - fm) / (2 * DELTA);
-        T[i] = original;
+        for (float ozone_tau = 0e9; ozone_tau < 1e9; ozone_tau += 1e8)
+        {
+          SOLAR_LONGWAVE = solar_longwave;
+          OZONE_SHARE = ozone_share;
+          OZONE_TAU = ozone_tau;
+          auto mag = residual(T).norm();
+          if (mag < min_err)
+          {
+            min_err = mag;
+            min_solar_longwave = solar_longwave;
+            min_ozone_share = ozone_share;
+            min_ozone_tau = ozone_tau;
+          }
+
+          std::cerr << mag << " ";
+          std::cerr << solar_longwave << " ";
+          std::cerr << ozone_share << " ";
+          std::cerr << ozone_tau << std::endl;
+        }
       }
-
-      std::cerr << "LOOP" << " " << fx << " x = " << x.transpose() << std::endl;
-
-      return fx;
-    }
-  };
-
-  std::vector<double> solve_state(double co2, double ch4)
-  {
-    const int n = 81;
-
-    LBFGSpp::LBFGSBParam<double> param; // Use B-param for bounds
-    param.epsilon = 1e-6;
-    param.max_iterations = 100;
-
-    LBFGSpp::LBFGSBSolver<double> solver(param); // Use B-solver (L-BFGS-B)
-    RadiativeError error(n);
-
-    // Set strict physical box constraints for atmospheric temperatures
-    VectorXd lb = VectorXd::Constant(n, 150.0); // Minimum allowable temperature (150 K)
-    VectorXd ub = VectorXd::Constant(n, 400.0); // Maximum allowable temperature (400 K)
-
-    VectorXd x = VectorXd::Constant(n, 300.0);
-    double fx;
-
-    try
-    {
-      int niter = solver.minimize(error, x, fx, lb, ub); // Pass bounds here!
-      std::cout << niter << " iterations" << std::endl;
-      std::cout << "f(x) = " << fx << std::endl;
-    }
-    catch (std::exception &e)
-    {
-      std::cerr << "Optimizer error: " << e.what() << std::endl;
     }
 
-    return {};
+    std::cerr << min_err << std::endl;
+    std::cerr << min_solar_longwave << std::endl;
+    std::cerr << min_ozone_share << std::endl;
+    std::cerr << min_ozone_tau << std::endl;
   }
 
   void init()
   {
+    load_data("precompute_bin/CH4_transmission.bin", result_ch4, sizeof result_ch4);
+    load_data("precompute_bin/H2O_transmission.bin", result_h2o, sizeof result_h2o);
+    load_data("precompute_bin/O3_transmission.bin", result_o3, sizeof result_o3);
+    load_data("precompute_bin/N2O_transmission.bin", result_n2o, sizeof result_n2o);
+    load_data("precompute_bin/CO2_transmission.bin", result_co2, sizeof result_co2);
+
     compute_planck();
     compute_afgl();
-    solve_state(-1, -1);
+    fit_params();
+    return;
+
+    constexpr int n = 81;
+    constexpr double T_MIN = 160;
+    constexpr double T_MAX = 440;  // keep inside the Planck table (150 K to 450 K)
+    constexpr double DELTA = 0.05; // finite-difference perturbation, in K
+    constexpr double MAX_STEP = 3; // largest allowed change of one temperature per iteration, in K
+
+    Eigen::VectorXd C(n);
+    for (int i = 0; i < (n - 1); i++)
+    {
+      C[i] = 1 / (afgl[i + 1][1] / afgl[i + 1][2]);
+    }
+
+    C[n - 1] = 1 / (afgl[0][1] / afgl[0][2]);
+
+    auto residual = [](const Eigen::VectorXd &x)
+    {
+      std::vector<double> T(x.data(), x.data() + x.size());
+      std::vector<double> E = compute_energy_error(T, 330e-6, 1.93e-6);
+      E.push_back(E[0]);
+      E.erase(E.begin());
+      return Eigen::VectorXd(Eigen::Map<Eigen::VectorXd>(E.data(), E.size()));
+    };
+
+    Eigen::VectorXd T(n);
+    for (int i = 0; i < (n - 1); i++)
+      T[i] = afgl[i + 1][2];
+    T[n - 1] = afgl[0][2];
+    Eigen::VectorXd E = residual(T);
+    Eigen::MatrixXd J(n, n);
+    double mag = E.squaredNorm();
+    double dt = 1e5;
+
+    for (int reps = 0; true; reps++)
+    {
+      std::cerr << "REP: " << reps << " ERROR: " << mag << " dt: " << dt << std::endl;
+      Eigen::VectorXd delta = E.cwiseProduct(C) * dt;
+
+      if (mag < 0.5)
+        break;
+
+      Eigen::VectorXd T_new = T;
+      for (int i = 0; i < n; i++)
+      {
+        T_new[i] = std::clamp(T[i] + std::clamp(delta[i], -MAX_STEP, MAX_STEP), T_MIN, T_MAX);
+      }
+
+      Eigen::VectorXd E_new = residual(T_new);
+      double mag_new = E_new.squaredNorm();
+
+      if (mag_new < mag)
+      {
+        T = T_new;
+        E = E_new;
+        mag = mag_new;
+        dt = std::min(dt * 2, 1e12);
+      }
+      else
+      {
+        dt /= 4;
+      }
+    }
+
+    std::cout << std::endl;
+    for (int i = 0; i < n; i++)
+      std::cout << T[i] << " ";
   }
 
 }

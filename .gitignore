@@ -52,3 +52,7 @@ config.json
 *.exe
 # WASM build output
 /public/wasm/
+.playwright-mcp/
+
+# Throwaway helper scripts (never used by the project)
+/workpad/

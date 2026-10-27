@@ -7,12 +7,51 @@ interface GreenhouseModule {
   _free(ptr: number): void;
   _gh_init(): number;
   _gh_num_layers(): number;
-  _gh_solve(co2Ppm: number, ch4Ppm: number, outT: number, capacity: number): number;
+  _gh_solve(
+    co2Ppm: number,
+    ch4Ppm: number,
+    outT: number,
+    capacity: number
+  ): number;
 }
 
 export interface Greenhouse {
   /** Equilibrium temperatures in K: 80 atmospheric layers (lowest first), then the surface. */
   solve(co2Ppm: number, ch4Ppm: number): Float64Array;
+}
+
+/** Number of atmospheric slabs the solver returns before the surface value. */
+export const NUM_LAYERS = 80;
+/** Thickness of each slab in km (`h` in compute/greenhouse/precompute.cpp). */
+export const LAYER_HEIGHT_KM = 1;
+/** Mid-point altitude of each slab in km, lowest first. */
+export const layerAltitudesKm: readonly number[] = Array.from(
+  { length: NUM_LAYERS },
+  (_, i) => (i + 0.5) * LAYER_HEIGHT_KM
+);
+
+export interface MacroState {
+  co2Ppm: number;
+  ch4Ppm: number;
+  /** Unweighted mean of the atmospheric slab temperatures in K. */
+  meanAtmosphereK: number;
+  surfaceK: number;
+}
+
+/** Splits a `solve()` result into the per-layer profile and its summary properties. */
+export function summarize(
+  co2Ppm: number,
+  ch4Ppm: number,
+  T: Float64Array
+): MacroState {
+  let sum = 0;
+  for (let i = 0; i < NUM_LAYERS; i++) sum += T[i];
+  return {
+    co2Ppm,
+    ch4Ppm,
+    meanAtmosphereK: sum / NUM_LAYERS,
+    surfaceK: T[NUM_LAYERS],
+  };
 }
 
 let instance: Promise<Greenhouse> | undefined;
@@ -25,12 +64,15 @@ export function loadGreenhouse(): Promise<Greenhouse> {
 async function init(): Promise<Greenhouse> {
   // Built into public/wasm/greenhouse by interface/greenhouse/build.sh; kept out of the bundler's module graph on purpose.
   const url = '/wasm/greenhouse/greenhouse.js';
-  const { default: createGreenhouse } = (await import(/* webpackIgnore: true */ url)) as {
+  const { default: createGreenhouse } = (await import(
+    /* webpackIgnore: true */ url
+  )) as {
     default: () => Promise<GreenhouseModule>;
   };
   const m = await createGreenhouse();
 
-  if (m._gh_init() !== 0) throw new Error('Greenhouse WASM failed to initialize');
+  if (m._gh_init() !== 0)
+    throw new Error('Greenhouse WASM failed to initialize');
   const layers = m._gh_num_layers();
 
   return {

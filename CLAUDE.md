@@ -41,4 +41,4 @@ All third-party code is a git submodule under `dependencies/` (Eigen, LBFGSpp, c
 
 ## Status
 
-Solver (`Greenhouse::solve_state`) is unfinished: it ignores its inputs and returns `{}`. The simulation page has no controls or plots yet.
+Solver (`Greenhouse::solve_state`) is unfinished: it ignores its inputs and returns `{}`. The simulation page has CO₂/CH₄ sliders and uPlot charts (`components/chart.tsx`), driven by `interface/greenhouse/mock.ts` until the real solver and WASM build exist (`use-greenhouse.ts` switches automatically).
