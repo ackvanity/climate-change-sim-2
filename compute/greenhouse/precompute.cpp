@@ -497,15 +497,13 @@ namespace Greenhouse
   constexpr double PLANCK_POINTS_STEP = 0.01;
   constexpr int NUM_SLABS = 80;
   constexpr double h = 1000; // 1 km slabs
-  double OZONE_SHARE = 0.1;
-  double OZONE_TAU = 0.5;
-  double SOLAR_LONGWAVE = 280;
 
   // header: z,p,t,n,H2O,O3,N2O,CO,CH4
   std::vector<std::vector<double>> afgl; // AFGL standard data, interpolated
   std::vector<double> vmr_o3;
   std::vector<double> vmr_n2o;
   std::vector<double> rh_h2o;
+  std::vector<double> inject_flux;
 
   struct Transmission
   {
@@ -687,7 +685,7 @@ namespace Greenhouse
       vmr_idx_1 = std::clamp(vmr_idx_0 + 1, 0, 10);
     }
 
-    memset(result.T, sizeof result.T, 0);
+    memset(result.T, 0, sizeof result.T);
 #define IDX(T, P, vmr) (T + 15 * (P + 18 * vmr))
     for (int bin = 0; bin < Config::NUM_BINS; bin++)
     {
@@ -753,15 +751,13 @@ namespace Greenhouse
     constexpr double mr_air = 28.96e-3; // The mr of the air, assumed to be constant, measured in KILOgrams (not grams) per mole.
 
     std::vector<double> P; // in atm
-    std::vector<double> rho;
-    P.push_back(1); // Hard-code 1 atm at surface
+    P.push_back(1);        // Hard-code 1 atm at surface
 
     double y = h / 2.0; // assume height at center
 
     for (auto t : T)
     {
-      rho.push_back(P.back() * PhysicsConstants::atm * mr_air / (PhysicsConstants::R * t));
-      P.push_back(P.back() - rho.back() * (PhysicsConstants::g * (PhysicsConstants::R_E * PhysicsConstants::R_E) / ((PhysicsConstants::R_E + y) * (PhysicsConstants::R_E + y))) * h / PhysicsConstants::atm);
+      P.push_back(P.back() * std::exp(-mr_air * h * PhysicsConstants::g / (PhysicsConstants::R * t)));
       y += h;
     }
     P.pop_back();
@@ -885,21 +881,6 @@ namespace Greenhouse
       fluxes[idx] -= fluxes[idx - 1];
       // std::cout << idx << " " << fluxes[idx] << std::endl;
     }
-    fluxes[0] += SOLAR_LONGWAVE * (1 - OZONE_SHARE);
-    double total = 0;
-    double dist = 0;
-    for (int idx = fluxes.size() - 1; idx > 0; idx--)
-    {
-      double delta = OZONE_TAU * vmr_o3[idx] * P[idx] / T[idx];
-      total += delta;
-    }
-    total = 1 - std::exp(-total);
-    for (int idx = fluxes.size() - 1; idx > 0; idx--)
-    {
-      double delta = OZONE_TAU * vmr_o3[idx];
-      double share = (std::exp(-dist) - std::exp(-dist - delta)) / total;
-      fluxes[idx] += SOLAR_LONGWAVE * OZONE_SHARE * share;
-    }
     T.insert(T.begin(), T_E);
     for (int idx = 0; idx <= (fluxes.size() - 2); idx++)
     {
@@ -911,6 +892,8 @@ namespace Greenhouse
       if (F > 0)
         fluxes[idx + 1] += F, fluxes[idx] -= F;
     }
+    for (int idx = 0; idx < std::min(fluxes.size(), inject_flux.size()); idx++)
+      fluxes[idx] += inject_flux[idx];
     return fluxes;
   }
 
@@ -925,75 +908,24 @@ namespace Greenhouse
 
   void fit_params()
   {
-    // params are
-    // SOLAR_LONGWAVE;
-    // OZONE_SHARE;
-    // OZONE_TAU;
-
-    double min_err = 1e10;
-    double min_solar_longwave = 0;
-    double min_ozone_share = 0;
-    double min_ozone_tau = 0;
     constexpr int n = 81;
 
-    Eigen::VectorXd T(n);
+    std::vector<double> T(n);
+
     for (int i = 0; i < (n - 1); i++)
       T[i] = afgl[i + 1][2];
     T[n - 1] = afgl[0][2];
-    auto residual = [](const Eigen::VectorXd &x)
-    {
-      std::vector<double> T(x.data(), x.data() + x.size());
-      std::vector<double> E = compute_energy_error(T, 330e-6, 1.93e-6);
-      E.push_back(E[0]);
-      E.erase(E.begin());
-      return Eigen::VectorXd(Eigen::Map<Eigen::VectorXd>(E.data(), E.size()));
-    };
 
-    for (float solar_longwave = 200; solar_longwave < 300; solar_longwave += 10)
-    {
-      for (float ozone_share = 0.10; ozone_share < 0.50; ozone_share += 0.05)
-      {
-        for (float ozone_tau = 0e9; ozone_tau < 1e9; ozone_tau += 1e8)
-        {
-          SOLAR_LONGWAVE = solar_longwave;
-          OZONE_SHARE = ozone_share;
-          OZONE_TAU = ozone_tau;
-          auto mag = residual(T).norm();
-          if (mag < min_err)
-          {
-            min_err = mag;
-            min_solar_longwave = solar_longwave;
-            min_ozone_share = ozone_share;
-            min_ozone_tau = ozone_tau;
-          }
+    inject_flux = compute_energy_error(T, 330e-6, 1.93e-6);
 
-          std::cerr << mag << " ";
-          std::cerr << solar_longwave << " ";
-          std::cerr << ozone_share << " ";
-          std::cerr << ozone_tau << std::endl;
-        }
-      }
-    }
-
-    std::cerr << min_err << std::endl;
-    std::cerr << min_solar_longwave << std::endl;
-    std::cerr << min_ozone_share << std::endl;
-    std::cerr << min_ozone_tau << std::endl;
+    for (auto &f : inject_flux)
+      f *= -1;
   }
 
-  void init()
+  std::mutex stdout_mutex;
+
+  std::vector<double> compute_atmosphere(double co2, double ch4, Eigen::VectorXd &T, bool reset = false)
   {
-    load_data("precompute_bin/CH4_transmission.bin", result_ch4, sizeof result_ch4);
-    load_data("precompute_bin/H2O_transmission.bin", result_h2o, sizeof result_h2o);
-    load_data("precompute_bin/O3_transmission.bin", result_o3, sizeof result_o3);
-    load_data("precompute_bin/N2O_transmission.bin", result_n2o, sizeof result_n2o);
-    load_data("precompute_bin/CO2_transmission.bin", result_co2, sizeof result_co2);
-
-    compute_planck();
-    compute_afgl();
-    fit_params();
-    return;
-
     constexpr int n = 81;
     constexpr double T_MIN = 160;
     constexpr double T_MAX = 440;  // keep inside the Planck table (150 K to 450 K)
@@ -1008,31 +940,37 @@ namespace Greenhouse
 
     C[n - 1] = 1 / (afgl[0][1] / afgl[0][2]);
 
-    auto residual = [](const Eigen::VectorXd &x)
+    auto residual = [&](const Eigen::VectorXd &x)
     {
       std::vector<double> T(x.data(), x.data() + x.size());
-      std::vector<double> E = compute_energy_error(T, 330e-6, 1.93e-6);
+      std::vector<double> E = compute_energy_error(T, co2, ch4);
       E.push_back(E[0]);
       E.erase(E.begin());
       return Eigen::VectorXd(Eigen::Map<Eigen::VectorXd>(E.data(), E.size()));
     };
 
-    Eigen::VectorXd T(n);
-    for (int i = 0; i < (n - 1); i++)
-      T[i] = afgl[i + 1][2];
-    T[n - 1] = afgl[0][2];
+    if (reset)
+    {
+      for (int i = 0; i < (n - 1); i++)
+        T[i] = afgl[i + 1][2];
+      T[n - 1] = afgl[0][2];
+      return {};
+    }
     Eigen::VectorXd E = residual(T);
-    Eigen::MatrixXd J(n, n);
     double mag = E.squaredNorm();
     double dt = 1e5;
 
-    for (int reps = 0; true; reps++)
+    bool stopped_because_of_reps = true;
+
+    for (int reps = 0; reps < 50000; reps++)
     {
-      std::cerr << "REP: " << reps << " ERROR: " << mag << " dt: " << dt << std::endl;
       Eigen::VectorXd delta = E.cwiseProduct(C) * dt;
 
-      if (mag < 0.5)
+      if (mag < 1e-7 || dt < 1e-12)
+      {
+        stopped_because_of_reps = false;
         break;
+      }
 
       Eigen::VectorXd T_new = T;
       for (int i = 0; i < n; i++)
@@ -1043,7 +981,7 @@ namespace Greenhouse
       Eigen::VectorXd E_new = residual(T_new);
       double mag_new = E_new.squaredNorm();
 
-      if (mag_new < mag)
+      if (mag_new < mag || E_new.dot(E_new.cwiseProduct(C)) < E.dot(E.cwiseProduct(C)))
       {
         T = T_new;
         E = E_new;
@@ -1054,11 +992,72 @@ namespace Greenhouse
       {
         dt /= 4;
       }
+      if ((reps % 50) == 0)
+      {
+        std::lock_guard<std::mutex> lock(stdout_mutex);
+        std::cerr << "REPETITION " << reps << " / 50000" << std::endl;
+      }
     }
 
-    std::cout << std::endl;
-    for (int i = 0; i < n; i++)
-      std::cout << T[i] << " ";
+    if (stopped_because_of_reps || (mag > 1e-7))
+    {
+      std::lock_guard<std::mutex> lock(stdout_mutex);
+      std::cerr << "WARNING: iteration stopped prematurely.\n"
+                << "CO2 VMR: " << co2 << "CH4 VMR: " << ch4 << "Energy error: " << mag << "dt: " << dt << std::endl;
+    }
+
+    std::vector<double> answer(T.data(), T.data() + T.size());
+    return answer;
+  }
+
+  double result[7 * 21 * 81];
+
+  void compute_stride(int ch4_idx)
+  {
+    constexpr int n = 81;
+    Eigen::VectorXd T(n);
+    compute_atmosphere(0, 0, T, true);
+
+    double ch4 = 1.0 + 0.5 * ch4_idx;
+    for (int co2_idx = 0; co2_idx < 21; co2_idx++)
+    {
+      int idx = (co2_idx + 21 * ch4_idx);
+      double co2 = 420 + 19 * co2_idx;
+      std::vector<double> tmp = compute_atmosphere(co2 * 1e-6, ch4 * 1e-6, T, false);
+      memcpy(result + (idx * 81), tmp.data(), (sizeof(double)) * tmp.size());
+      {
+        std::lock_guard<std::mutex> lock(stdout_mutex);
+        std::cout << ch4_idx << " / " << co2_idx << "[" << idx << "]" << std::endl;
+      }
+    }
+  }
+
+  void init()
+  {
+    load_data("precompute_bin/CH4_transmission.bin", result_ch4, sizeof result_ch4);
+    load_data("precompute_bin/H2O_transmission.bin", result_h2o, sizeof result_h2o);
+    load_data("precompute_bin/O3_transmission.bin", result_o3, sizeof result_o3);
+    load_data("precompute_bin/N2O_transmission.bin", result_n2o, sizeof result_n2o);
+    load_data("precompute_bin/CO2_transmission.bin", result_co2, sizeof result_co2);
+
+    compute_planck();
+    compute_afgl();
+    fit_params();
+
+    std::vector<std::thread> threads;
+
+    for (int ch4_idx = 0; ch4_idx < 7; ch4_idx++)
+    {
+      threads.push_back(std::thread(compute_stride, ch4_idx));
+    }
+
+    for (auto &thread : threads)
+    {
+      thread.join();
+    }
+
+    std::ofstream output("precompute_bin/final_result.bin");
+    output.write(reinterpret_cast<char *>(result), sizeof result);
   }
 
 }

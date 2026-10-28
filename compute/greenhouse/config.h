@@ -65,7 +65,6 @@ namespace PhysicsConstants
   constexpr double c2 = h * c / k_B * 100; // Second radiation constant [cm K]
   constexpr double R = 8.314462618;        // Molar gas constant [J / K / mol]
   constexpr double g = 9.80665;            // Gravitational acceleration on Earth's surface [m / s^2]
-  constexpr double R_E = 9.80665e6;        // Earth's radius [m]
   constexpr double sigma = 5.670374419e-8; // Stefan-boltzmann constant [W / m^2 / K^4]
   constexpr double atm = 101325;
 }

@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-# Compiles the greenhouse solver + precomputed tables to WASM. Requires the Emscripten SDK (emcc) on PATH.
+# Compiles the table decoder/interpolator to WASM. Requires the Emscripten SDK (emcc) on PATH.
 # Output goes to public/wasm/greenhouse/, which Next.js serves statically (gitignored).
+# The precomputed table itself is NOT compiled in: copy compute/greenhouse/precompute_bin/final_result.bin to
+# public/data/greenhouse/final_result.bin (see compute/greenhouse/INTERFACE.md). Rebuild only if the table format changes.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 OUT=public/wasm/greenhouse
 mkdir -p "$OUT"
 
-# --preload-file packs the tables into greenhouse.data, mounted in the virtual FS at the paths the C++ expects.
-# Dependencies are reached through the symlinks in compute/greenhouse (which point into dependencies/).
-emcc interface/greenhouse/src/greenhouse_wasm.cpp compute/greenhouse/Faddeeva.cc \
-  -I compute/greenhouse \
-  -std=c++20 -O3 -fexceptions \
+emcc interface/greenhouse/src/greenhouse_wasm.cpp \
+  -std=c++20 -O3 \
   -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createGreenhouse \
   -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH \
-  -sEXPORTED_FUNCTIONS=_gh_init,_gh_num_layers,_gh_solve,_malloc,_free \
-  -sEXPORTED_RUNTIME_METHODS=HEAPF64 \
-  --preload-file compute/greenhouse/precompute_bin@precompute_bin \
-  --preload-file compute/greenhouse/afgl-1986/1f.csv@afgl-1986/1f.csv \
+  -sEXPORTED_FUNCTIONS=_gh_init,_gh_num_layers,_gh_table_bytes,_gh_domain,_gh_solve,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=HEAPF64,HEAPU8 \
   -o "$OUT/greenhouse.js"
 
-echo "Built $OUT/greenhouse.{js,wasm,data}"
+echo "Built $OUT/greenhouse.{js,wasm}"

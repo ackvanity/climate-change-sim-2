@@ -1,78 +1,123 @@
 // WASM entry point: the only C++ the browser sees.
-// Wraps the solver in compute/greenhouse/precompute.cpp behind a small C ABI (see ../README.md).
-// Tables are read from Emscripten's virtual filesystem, populated by --preload-file (see ../build.sh).
+// Decodes the table precomputed by compute/greenhouse (final_result.bin) and interpolates it.
+// The file layout is specified in compute/greenhouse/INTERFACE.md; the C ABI in ../README.md.
+// Nothing from compute/ is compiled in: the browser never solves anything, it only looks the answer up.
 
-#define GREENHOUSE_AS_LIBRARY
-#include "../../../compute/greenhouse/precompute.cpp"
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <vector>
 
+#ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#else
+#define EMSCRIPTEN_KEEPALIVE // native builds (tests) have no Emscripten
+#endif
 
 namespace
 {
-  bool initialized = false;
+  // Grid definition. Must match Greenhouse::init() in compute/greenhouse/precompute.cpp (see INTERFACE.md).
+  constexpr int NUM_VALUES = 81; // 80 atmospheric slabs (lowest first) + surface temperature last
+  constexpr int CO2_COUNT = 21;
+  constexpr double CO2_MIN_PPM = 420.0;
+  constexpr double CO2_STEP_PPM = 19.0;
+  constexpr int CH4_COUNT = 7;
+  constexpr double CH4_MIN_PPM = 1.0;
+  constexpr double CH4_STEP_PPM = 0.5;
 
-  template <size_t N>
-  void load_transmission(const char *name, CKD::Binning (&dest)[N])
+  constexpr double CO2_MAX_PPM = CO2_MIN_PPM + CO2_STEP_PPM * (CO2_COUNT - 1);
+  constexpr double CH4_MAX_PPM = CH4_MIN_PPM + CH4_STEP_PPM * (CH4_COUNT - 1);
+
+  constexpr std::size_t TABLE_DOUBLES = static_cast<std::size_t>(CH4_COUNT) * CO2_COUNT * NUM_VALUES;
+  constexpr std::size_t TABLE_BYTES = TABLE_DOUBLES * sizeof(double);
+
+  // Plausibility window for a stored temperature [K]. The solver clamps to 160..440 K; anything else means a
+  // corrupt or unfilled file (an unwritten point is all zeros).
+  constexpr double T_VALID_MIN = 150.0;
+  constexpr double T_VALID_MAX = 450.0;
+
+  std::vector<double> table; // [ch4_idx][co2_idx][NUM_VALUES]
+
+  const double *point(int co2_idx, int ch4_idx)
   {
-    std::ifstream file(std::string("precompute_bin/") + name + "_transmission.bin", std::ios::binary);
-    if (!file.is_open())
-      throw std::runtime_error(std::string("Transmission table for ") + name + " cannot be opened!");
-    file.read(reinterpret_cast<char *>(dest), sizeof dest);
-    if (static_cast<size_t>(file.gcount()) != sizeof dest)
-      throw std::runtime_error(std::string("Transmission table for ") + name + " has unexpected size!");
+    return table.data() + (static_cast<std::size_t>(ch4_idx) * CO2_COUNT + co2_idx) * NUM_VALUES;
+  }
+
+  // Position of v on a uniform axis: the lower node index (clamped so index + 1 exists) and the fraction towards the next node.
+  void locate(double v, double min, double step, int count, int &index, double &frac)
+  {
+    double u = (std::clamp(v, min, min + step * (count - 1)) - min) / step;
+    index = std::min(static_cast<int>(std::floor(u)), count - 2);
+    frac = u - index;
   }
 } // namespace
 
 extern "C"
 {
-  constexpr int GH_NUM_LAYERS = 81; // 80 atmospheric slabs (lowest first) + surface temperature last
+  // Size in bytes of final_result.bin that gh_init expects.
+  EMSCRIPTEN_KEEPALIVE int gh_table_bytes() { return static_cast<int>(TABLE_BYTES); }
 
-  // Loads tables and builds Planck/AFGL data. Returns 0 on success, -1 on failure.
-  EMSCRIPTEN_KEEPALIVE int gh_init()
+  // Decodes the table from `size` bytes at `bytes` (raw contents of final_result.bin: little-endian IEEE-754 float64,
+  // which is also the byte order of WebAssembly memory, so decoding is a copy). The bytes are copied; the caller may
+  // free them afterwards. Returns 0 on success, -1 null pointer, -2 wrong size, -3 non-finite or implausible values.
+  EMSCRIPTEN_KEEPALIVE int gh_init(const unsigned char *bytes, int size)
   {
-    if (initialized)
-      return 0;
-    try
-    {
-      load_transmission("CO2", result_co2);
-      load_transmission("H2O", result_h2o);
-      load_transmission("O3", result_o3);
-      load_transmission("CH4", result_ch4);
-      load_transmission("N2O", result_n2o);
-      Greenhouse::compute_planck();
-      Greenhouse::compute_afgl();
-    }
-    catch (const std::exception &e)
-    {
-      std::cerr << "gh_init: " << e.what() << std::endl;
+    if (bytes == nullptr)
       return -1;
-    }
-    initialized = true;
+    if (size < 0 || static_cast<std::size_t>(size) != TABLE_BYTES)
+      return -2;
+
+    std::vector<double> decoded(TABLE_DOUBLES);
+    std::memcpy(decoded.data(), bytes, TABLE_BYTES);
+    for (double t : decoded)
+      if (!(t >= T_VALID_MIN && t <= T_VALID_MAX)) // also rejects NaN
+        return -3;
+
+    table.swap(decoded);
     return 0;
   }
 
   // Number of doubles gh_solve writes on success.
-  EMSCRIPTEN_KEEPALIVE int gh_num_layers() { return GH_NUM_LAYERS; }
+  EMSCRIPTEN_KEEPALIVE int gh_num_layers() { return NUM_VALUES; }
 
-  // Solves for the equilibrium temperature profile [K] (lowest layer first, surface last).
-  // Returns the number of values written to out_T, or a negative value on failure.
+  // Writes the covered range as { co2_min, co2_max, ch4_min, ch4_max } [ppm] to out[0..3].
+  EMSCRIPTEN_KEEPALIVE void gh_domain(double *out)
+  {
+    out[0] = CO2_MIN_PPM;
+    out[1] = CO2_MAX_PPM;
+    out[2] = CH4_MIN_PPM;
+    out[3] = CH4_MAX_PPM;
+  }
+
+  // Equilibrium temperature profile [K] (lowest layer first, surface last) at the given gas amounts, bilinearly
+  // interpolated in the precomputed table. Inputs outside the covered range are clamped to its edge.
+  // Returns the number of values written to out_T, or a negative value on failure
+  // (-1 not initialised, -2 capacity too small or null output, -3 non-finite input).
   EMSCRIPTEN_KEEPALIVE int gh_solve(double co2_ppm, double ch4_ppm, double *out_T, int capacity)
   {
-    if (!initialized)
+    if (table.empty())
       return -1;
-    if (capacity < GH_NUM_LAYERS)
+    if (out_T == nullptr || capacity < NUM_VALUES)
       return -2;
-    try
-    {
-      std::vector<double> T = Greenhouse::solve_state(co2_ppm * 1e-6, ch4_ppm * 1e-6);
-      int n = std::min<int>(T.size(), capacity);
-      std::copy_n(T.begin(), n, out_T);
-      return n;
-    }
-    catch (const std::exception &e)
-    {
-      std::cerr << "gh_solve: " << e.what() << std::endl;
+    if (!std::isfinite(co2_ppm) || !std::isfinite(ch4_ppm))
       return -3;
+
+    int i, j;
+    double fi, fj;
+    locate(co2_ppm, CO2_MIN_PPM, CO2_STEP_PPM, CO2_COUNT, i, fi);
+    locate(ch4_ppm, CH4_MIN_PPM, CH4_STEP_PPM, CH4_COUNT, j, fj);
+
+    const double *p00 = point(i, j);
+    const double *p10 = point(i + 1, j);
+    const double *p01 = point(i, j + 1);
+    const double *p11 = point(i + 1, j + 1);
+    for (int k = 0; k < NUM_VALUES; k++)
+    {
+      double a = p00[k] + fi * (p10[k] - p00[k]);
+      double b = p01[k] + fi * (p11[k] - p01[k]);
+      out_T[k] = a + fj * (b - a);
     }
+    return NUM_VALUES;
   }
 }
