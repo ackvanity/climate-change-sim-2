@@ -11,6 +11,9 @@ Tags (either may be absent when unknown):
 
 ## General
 
+- 2026-11-02 — [Claude] — `CLAUDE.md`: added the per-turn rule (log Dev changes first, do the task, then log the turn) and made `LOGS.md` an append-only ledger.
+- 2026-11-02 — [Claude] — `CLAUDE.md`: added the rule to split hybrid work into its smallest tagged steps.
+- 2026-11-02 — [Dev] — Committed `3fb9af8` "E2E integration of greenhouse simulation and better logging" (includes the `LOGS.md`/`SIMULATIONS.md` files).
 - 2026-11-02 — [Claude] — Added `LOGS.md` and `SIMULATIONS.md`; moved the progress log out of `CLAUDE.md`; `CLAUDE.md` now covers the `urban` project.
 
 ## greenhouse
