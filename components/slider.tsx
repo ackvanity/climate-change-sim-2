@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, type Ref } from 'react';
 
 export interface SliderProps {
   label: string;
@@ -12,6 +12,8 @@ export interface SliderProps {
   /** Digits after the decimal point in the readout. */
   decimals?: number;
   onChange: (value: number) => void;
+  /** The whole control (label, readout and track), e.g. to highlight it. */
+  ref?: Ref<HTMLDivElement>;
 }
 
 export function Slider({
@@ -23,10 +25,11 @@ export function Slider({
   unit,
   decimals = 0,
   onChange,
+  ref,
 }: SliderProps) {
   const id = useId();
   return (
-    <div className="mb-6">
+    <div ref={ref} className="mb-6">
       <label htmlFor={id} className="mb-1 flex justify-between font-medium">
         <span>{label}</span>
         <span className="tabular-nums">

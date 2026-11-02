@@ -2,7 +2,13 @@
 
 import 'uplot/dist/uPlot.min.css';
 import type uPlot from 'uplot';
-import { useEffect, useMemo, useRef } from 'react';
+import {
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  type Ref,
+} from 'react';
 
 // Hex values of the design tokens in app/globals.css; canvas drawing cannot read CSS variables directly.
 const PALETTE = ['#6a942b', '#5c8889', '#e2ae35', '#9c3a1f'];
@@ -61,6 +67,21 @@ export interface ChartMarker {
   size?: number;
 }
 
+export interface ChartRef {
+  /**
+   * Viewport (client) pixel position of a data point, e.g. for anchoring overlays.
+   * `{ NaN, NaN }` until the plot is built. `axis` picks the Y scale (needs `secondaryAxis` for 'right').
+   */
+  getScreenCoordinates: (
+    x: number,
+    y: number,
+    axis?: 'left' | 'right'
+  ) => { x: number; y: number };
+
+  /** Viewport pixel rectangle of the plotting area (inside the axes); `NaN`s until the plot is built. */
+  getGraphBoundingRect: () => { x: number; y: number; w: number; h: number };
+}
+
 export interface ChartProps {
   /** Shared X values, ascending. */
   x: ChartValues;
@@ -79,6 +100,7 @@ export interface ChartProps {
   /** Plot height in px; the width follows the container. */
   height?: number;
   className?: string;
+  ref?: Ref<ChartRef>;
 }
 
 const noop = (v: number) => String(+v.toPrecision(6));
@@ -94,9 +116,43 @@ export function Chart({
   options,
   height = 420,
   className,
+  ref,
 }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      getScreenCoordinates(x, y, axis = 'left') {
+        const u = plotRef.current;
+        if (!u) return { x: NaN, y: NaN };
+        const px = u.valToPos(x, 'x');
+        const py = u.valToPos(
+          y,
+          secondaryAxis && axis === 'right' ? 'y2' : 'y'
+        );
+        // Read on every call: the rectangle moves when the page scrolls or resizes.
+        const { left, top } = u.over.getBoundingClientRect();
+        // Same axis swap as the draw hook: when vertical, x runs down the plot and y across it.
+        return vertical
+          ? { x: left + py, y: top + px }
+          : { x: left + px, y: top + py };
+      },
+      getGraphBoundingRect() {
+        const u = plotRef.current;
+        if (!u) return { x: NaN, y: NaN, w: NaN, h: NaN };
+        const bounding = u.over.getBoundingClientRect();
+        return {
+          x: bounding.left,
+          y: bounding.top,
+          w: bounding.width,
+          h: bounding.height,
+        };
+      },
+    }),
+    [vertical, secondaryAxis]
+  );
 
   const visible = useMemo(
     () => series.filter((s) => secondaryAxis || (s.axis ?? 'left') === 'left'),

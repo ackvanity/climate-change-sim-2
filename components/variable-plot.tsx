@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type Ref } from 'react';
 import { Chart, type ChartMarker, type ChartSeries } from './chart';
 
 export interface PlotVariable {
@@ -8,6 +8,13 @@ export interface PlotVariable {
   unit: string;
   /** Digits after the decimal point in tick labels and the legend. */
   decimals: number;
+}
+
+/** The variables on the chart's axes; `y2` is `''` for none. */
+export interface PlotAxes<K extends string> {
+  x: K;
+  y: K;
+  y2: K | '';
 }
 
 export interface VariablePlotProps<K extends string> {
@@ -19,6 +26,11 @@ export interface VariablePlotProps<K extends string> {
   defaultY: K;
   /** Initial variable on the second Y axis; none by default. */
   defaultY2?: K;
+  /** Controlled axes (e.g. to set them from outside). Omit to let the selectors keep their own state. */
+  axes?: PlotAxes<K>;
+  onAxesChange?: (axes: PlotAxes<K>) => void;
+  /** The clear button, e.g. to highlight it. */
+  clearRef?: Ref<HTMLButtonElement>;
   /** Called by the clear button. The button is hidden when omitted. */
   onClear?: () => void;
   clearLabel?: string;
@@ -38,14 +50,25 @@ export function VariablePlot<K extends string>({
   defaultX,
   defaultY,
   defaultY2,
+  axes,
+  onAxesChange,
+  clearRef,
   onClear,
   clearLabel = 'Clear',
   caption,
   height = 480,
 }: VariablePlotProps<K>) {
-  const [xKey, setXKey] = useState<K>(defaultX);
-  const [yKey, setYKey] = useState<K>(defaultY);
-  const [y2Key, setY2Key] = useState<K | ''>(defaultY2 ?? '');
+  const [inner, setInner] = useState<PlotAxes<K>>({
+    x: defaultX,
+    y: defaultY,
+    y2: defaultY2 ?? '',
+  });
+  const { x: xKey, y: yKey, y2: y2Key } = axes ?? inner;
+  const setAxes = (patch: Partial<PlotAxes<K>>) => {
+    const next = { ...(axes ?? inner), ...patch };
+    setInner(next);
+    onAxesChange?.(next);
+  };
 
   // uPlot needs ascending X.
   const sorted = useMemo(
@@ -107,23 +130,24 @@ export function VariablePlot<K extends string>({
           label="X axis"
           value={xKey}
           options={variables}
-          onChange={setXKey}
+          onChange={(x) => setAxes({ x })}
         />
         <VariableSelect
           label="Y axis"
           value={yKey}
           options={variables}
-          onChange={setYKey}
+          onChange={(y) => setAxes({ y })}
         />
         <VariableSelect
           label="Second Y axis"
           value={y2Key}
           options={variables}
-          onChange={setY2Key}
+          onChange={(y2) => setAxes({ y2 })}
           allowNone
         />
         {onClear && (
           <button
+            ref={clearRef}
             onClick={onClear}
             className="relative ml-auto cursor-pointer bg-red-500 p-2 px-3 text-white before:absolute before:-inset-1 before:block before:w-0 before:bg-red-700 before:transition-all hover:before:w-[calc(100%+8px)]"
           >

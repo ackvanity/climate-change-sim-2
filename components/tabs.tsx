@@ -8,8 +8,24 @@ export interface Tab {
   content: React.ReactNode;
 }
 
-export function Tabs({ tabs, className }: { tabs: Tab[]; className?: string }) {
-  const [active, setActive] = useState(tabs[0]?.id);
+export function Tabs({
+  tabs,
+  className,
+  value,
+  onChange,
+}: {
+  tabs: Tab[];
+  className?: string;
+  /** Selected tab id. Omit to let the component keep its own selection. */
+  value?: string;
+  onChange?: (id: string) => void;
+}) {
+  const [inner, setInner] = useState(tabs[0]?.id);
+  const active = value ?? inner;
+  const setActive = (id: string) => {
+    setInner(id);
+    onChange?.(id);
+  };
   const base = useId();
   const current = tabs.find((t) => t.id === active) ?? tabs[0];
 
