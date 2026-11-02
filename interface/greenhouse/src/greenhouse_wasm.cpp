@@ -19,6 +19,10 @@ namespace
 {
   // Grid definition. Must match Greenhouse::init() in compute/greenhouse/precompute.cpp (see INTERFACE.md).
   constexpr int NUM_VALUES = 81; // 80 atmospheric slabs (lowest first) + surface temperature last
+  constexpr int NUM_INTERP_RANGES = 3;
+  constexpr int NUM_INTERP[NUM_INTERP_RANGES] = {3, 10, 10};
+  constexpr int INTERP_L[NUM_INTERP_RANGES] = {20, 31, 50};
+  constexpr int INTERP_R[NUM_INTERP_RANGES] = {30, 48, 80};
   constexpr int CO2_COUNT = 21;
   constexpr double CO2_MIN_PPM = 420.0;
   constexpr double CO2_STEP_PPM = 19.0;
@@ -112,12 +116,40 @@ extern "C"
     const double *p10 = point(i + 1, j);
     const double *p01 = point(i, j + 1);
     const double *p11 = point(i + 1, j + 1);
+    const double *base = point(0, 0);
+    double out_tmp[NUM_VALUES];
+
     for (int k = 0; k < NUM_VALUES; k++)
     {
       double a = p00[k] + fi * (p10[k] - p00[k]);
       double b = p01[k] + fi * (p11[k] - p01[k]);
-      out_T[k] = a + fj * (b - a);
+      out_tmp[k] = a + fj * (b - a) - base[k];
     }
+
+    int interp_idx = 0;
+
+    for (int k = 0; k < (NUM_VALUES - 1); k++)
+    {
+      double total = out_tmp[k];
+      int sides = 0;
+      while (interp_idx < NUM_INTERP_RANGES && INTERP_R[interp_idx] <= k)
+        interp_idx++;
+
+      if (interp_idx < NUM_INTERP_RANGES && INTERP_L[interp_idx] <= k)
+      {
+        int interp_len = NUM_INTERP[interp_idx];
+        int interp_l = INTERP_L[interp_idx];
+        int interp_r = INTERP_R[interp_idx];
+        sides = std::min(interp_len, std::min(k - interp_l, interp_r - k));
+        for (int i = 1; i <= sides; i++)
+        {
+          total += out_tmp[k - i];
+          total += out_tmp[k + i];
+        }
+      }
+      out_T[k] = total / (sides * 2 + 1) + base[k];
+    }
+    out_T[NUM_VALUES - 1] = out_tmp[NUM_VALUES - 1] + base[NUM_VALUES - 1];
     return NUM_VALUES;
   }
 }
