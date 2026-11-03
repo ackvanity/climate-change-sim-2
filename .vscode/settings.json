@@ -9,5 +9,8 @@
     "editor.formatOnSave": true,
     "editor.formatOnPaste": false,
     "editor.formatOnSaveMode": "file"
+  },
+  "[cpp]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools"
   }
 }
