@@ -40,6 +40,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# python
+venv
 
 # HITRAN
 /.provenance
@@ -56,3 +58,4 @@ config.json
 
 # Throwaway helper scripts (never used by the project)
 /workpad/
+

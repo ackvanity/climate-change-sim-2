@@ -9,11 +9,5 @@
     "editor.formatOnSave": true,
     "editor.formatOnPaste": false,
     "editor.formatOnSaveMode": "file"
-  },
-  "python.REPL.enableREPLSmartSend": false,
-  "[cpp]": {
-    "editor.defaultFormatter": "ms-vscode.cpptools"
-  },
-  "cmake.sourceDirectory": "/home/ackhava/fun/climate-change-demo/climate-change-sim-2/dependencies/cpp-terminal",
-  "cmake.autoDetectSourceDirectory": false
+  }
 }
