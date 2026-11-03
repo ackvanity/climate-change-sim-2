@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import React from 'react';
+import { Tour } from './use-tour';
 
 function Simulation({ children }: { children?: React.ReactNode }) {
   return <main className="flex min-h-screen w-full flex-col">{children}</main>;
@@ -7,14 +8,34 @@ function Simulation({ children }: { children?: React.ReactNode }) {
 
 function Heading({
   title,
+  tour,
   children,
 }: {
   title: string;
   children?: React.ReactNode;
+  tour?: Tour;
 }) {
   return (
-    <header className="bg-primary-500 p-4 px-8 text-white">
-      <h1 className="text-2xl">{title}</h1>
+    <header className="bg-primary-500 flex w-full p-4 px-8 text-white">
+      <h1 className="inline text-2xl">{title}</h1>
+      {tour ? (
+        <div className="ml-auto">
+          <span>
+            Currently at slide{' '}
+            <span className="font-bold">{tour.index + 1}</span> out of{' '}
+            <span className="font-bold">{tour.count}</span>
+          </span>
+          <button
+            onClick={tour.open}
+            type="button"
+            className="relative mr-4 ml-4 cursor-pointer bg-slate-500 p-2 px-3 text-white before:absolute before:-inset-1 before:block before:w-0 before:bg-slate-700 before:transition-all hover:before:w-[calc(100%+8px)]"
+          >
+            <span className="relative">Continue Walkthrough</span>
+          </button>
+        </div>
+      ) : (
+        <></>
+      )}
       {children}
     </header>
   );

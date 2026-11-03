@@ -40,9 +40,22 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Python
+# python
 venv
 
-## HITRAN
+# HITRAN
+/.provenance
 config.json
-.provenance
+
+# Executable
+# GCC on Linux
+*.out
+# Windows
+*.exe
+# WASM build output
+/public/wasm/
+.playwright-mcp/
+
+# Throwaway helper scripts (never used by the project)
+/workpad/
+

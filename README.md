@@ -1,41 +1,49 @@
-# Development
+# Climate Change Simulations
 
-## Climate change
+An interactive, educational web demo of how greenhouse gases (CO₂, H₂O, CH₄, N₂O, O₃) shape Earth's atmospheric temperature, built on line-by-line radiative transfer rather than a toy model.
 
-Required setups:
+## Structure
 
-- Python (for precomputation): Virtual environment, `numpy`, and _HITRAN_
-- C++: _WASM_
-
-## Setting up
-
-See each simulation for what they exactly need. Not all dependencies are used on every simulation and some are development-only.
-
-### Python
-
-- Create a virtual environment
-- Activate it
-- Install core dependencies: `black`
-
-**NOTES**:
-
-1. Kindly format all Python files with `black` before a commit!
-
-#### HITRAN API (HAPI) `hitran-api`
-
-In the working directory of your simulation, make a `config.json` like this:
-
-```json
-{
-  "engine": "sqlite",
-  "database": "local",
-  "database_dir": "./",
-  "echo": false,
-  "debug": false,
-  "host": "https://hitran.org",
-  "api_version": "v2",
-  "api_key": "YOUR_API_KEY_HERE"
-}
+```
+compute/<project>/            Offline C++/Python physics (not used by the UI directly)
+  greenhouse/                   HITRAN → correlated-k tables → radiative-equilibrium solver
+  grid/                         Circuit-simulation prototype
+interface/<project>/          WASM bridge between compute and UI (C ABI + TypeScript binding)
+  greenhouse/
+app/simulations/<project>/    Next.js simulation pages
+  greenhouse/
+app/, components/             Landing page, shared UI components
+dependencies/                 Git submodules (Eigen, LBFGSpp, cpp-terminal, AFGL-1986 data),
+                              symlinked into the projects that use them
 ```
 
-Note that you need to register an account and generate an API key, and that this JSON file must be present where you invoke your scripts. I prefer writing it once on my root directory and copy it to any simulation folder that needs it. The HITRAN API is usually only needed for data generation in Python.
+Every project keeps its code in its own subfolder under `compute/`, `interface/` and `app/simulations/`.
+
+Pipeline: `export_data.py` downloads HITRAN spectroscopy → `precompute.cpp` builds binary correlated-k tables in `compute/greenhouse/precompute_bin/` → `interface/greenhouse/build.sh` compiles the solver and tables to WASM in `public/wasm/greenhouse/` → the UI loads it through `interface/greenhouse/greenhouse.ts`. See [`interface/greenhouse/README.md`](interface/greenhouse/README.md).
+
+## Getting started
+
+```bash
+git submodule update --init --recursive
+pnpm install
+pnpm dev            # http://localhost:3000
+```
+
+To build the WASM module (requires the [Emscripten SDK](https://emscripten.org/)):
+
+```bash
+./interface/greenhouse/build.sh
+```
+
+To regenerate the spectroscopic tables (slow, about 4 hours on a 12-core CPU), run from `compute/greenhouse/`:
+
+```bash
+python export_data.py        # needs the hapi package and a HITRAN API key
+g++ --std=c++20 -O3 -pthread -I. precompute.cpp Faddeeva.cc -o precompute && ./precompute
+```
+
+## Status
+
+Work in progress. The correlated-k precomputation is complete; the equilibrium solver is unfinished and the simulation page is still an empty layout shell.
+
+Design tokens and the colour rationale are in [`DESIGN.md`](DESIGN.md).
