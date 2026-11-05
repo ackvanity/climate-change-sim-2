@@ -19,7 +19,18 @@ dependencies/                 Git submodules (Eigen, LBFGSpp, cpp-terminal, AFGL
 
 Every project keeps its code in its own subfolder under `compute/`, `interface/` and `app/simulations/`.
 
-Pipeline: `export_data.py` downloads HITRAN spectroscopy → `precompute.cpp` builds binary correlated-k tables in `compute/greenhouse/precompute_bin/` → `interface/greenhouse/build.sh` compiles the solver and tables to WASM in `public/wasm/greenhouse/` → the UI loads it through `interface/greenhouse/greenhouse.ts`. See [`interface/greenhouse/README.md`](interface/greenhouse/README.md).
+Pipeline: `export_data.py` downloads HITRAN spectroscopy → `CKD::compute_ckd()` (`ckd.cpp`) builds binary correlated-k tables in `compute/greenhouse/precompute_bin/` → `Greenhouse::init()` / `Greenhouse::compute()` (`greenhouse.cpp`) relax the model and write `final_result.bin` → `interface/greenhouse/build.sh` compiles the solver and tables to WASM in `public/wasm/greenhouse/` → the UI loads it through `interface/greenhouse/greenhouse.ts`. See [`interface/greenhouse/README.md`](interface/greenhouse/README.md).
+
+## Compute architecture (greenhouse)
+
+The offline C++ in `compute/greenhouse/` is a small library, so other simulations (e.g. `urban`) can include the headers and link the sources instead of copying code:
+
+| Module                  | Contents                                                                                                                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.h`              | Spectral bins, g-points and physical constants                                                                                                                                      |
+| `ckd.h` / `ckd.cpp`     | `CKD` namespace: HITRAN line data, `Species`, the correlated-k tables (`compute_ckd`)                                                                                               |
+| `greenhouse.h` / `.cpp` | `Greenhouse` namespace: `init()` loads data, `compute_atmosphere()` finds one equilibrium, `compute()` runs the sweep                                                               |
+| `precompute.cpp`        | Still the original single-file version with `main` (own copy of both modules); a driver for the split files is still to be written. Never link it with `ckd.cpp` / `greenhouse.cpp` |
 
 ## Getting started
 

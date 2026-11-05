@@ -17,7 +17,7 @@
 
 namespace
 {
-  // Grid definition. Must match Greenhouse::init() in compute/greenhouse/precompute.cpp (see INTERFACE.md).
+  // Grid definition. Must match Greenhouse::compute() in compute/greenhouse/greenhouse.cpp (see INTERFACE.md).
   constexpr int NUM_VALUES = 81; // 80 atmospheric slabs (lowest first) + surface temperature last
   constexpr int NUM_INTERP_RANGES = 3;
   constexpr int NUM_INTERP[NUM_INTERP_RANGES] = {3, 10, 10};

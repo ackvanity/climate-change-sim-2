@@ -34,7 +34,7 @@ export interface Greenhouse {
 
 /** Number of atmospheric slabs the solver returns before the surface value. */
 export const NUM_LAYERS = 80;
-/** Thickness of each slab in km (`h` in compute/greenhouse/precompute.cpp). */
+/** Thickness of each slab in km (`h` in compute/greenhouse/greenhouse.h). */
 export const LAYER_HEIGHT_KM = 1;
 /**
  * Where slab i's temperature sits inside its slab, as a fraction of the slab thickness above its bottom (0 = bottom

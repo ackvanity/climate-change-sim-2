@@ -1,6 +1,6 @@
 # Greenhouse precomputation: output files and how `interface/` reads them
 
-`Greenhouse::init()` in `precompute.cpp` solves the model on a grid of CO₂ and CH₄ amounts and writes one file the
+`Greenhouse::compute()` (`greenhouse.cpp`, after `Greenhouse::init()` has loaded the correlated-k tables) solves the model on a grid of CO₂ and CH₄ amounts and writes one file the
 browser needs: **`precompute_bin/final_result.bin`**. The other `.bin` files in `precompute_bin/` are inputs to the
 offline computation and are never shipped to the browser.
 
@@ -27,7 +27,7 @@ Index of a value (in doubles): `((ch4_idx * 21 + co2_idx) * 81) + k`. One grid p
 
 Meaning of the numbers:
 
-- Each point is the equilibrium of the model (Greenhouse namespace in `precompute.cpp`) at that gas amount, found by
+- Each point is the equilibrium of the model (Greenhouse namespace in `greenhouse.h` / `greenhouse.cpp`) at that gas amount, found by
   relaxation (stopped at |E|² < 1e-7) warm-started along each CO₂ row.
 - The model is anchored to AFGL through `inject_flux` (`fit_params()`): at the baseline (330 ppm CO₂, 1.93 ppm CH₄) it
   reproduces the AFGL profile exactly, so **slab `k` corresponds to altitude `k + 1` km** (AFGL temperature at the
@@ -102,7 +102,7 @@ Surface temperature must rise with both CO₂ (along `co2_idx`) and CH₄ (along
 
 ### Changing the grid
 
-The axes are constants in three places that must agree: `Greenhouse::init()` (loop bounds, `420 + 19 * co2_idx`,
+The axes are constants in three places that must agree: `Greenhouse::compute_stride()` in `greenhouse.cpp` (loop bounds, `420 + 19 * co2_idx`,
 `1.0 + 0.5 * ch4_idx`, the `result` array size), the top of `interface/greenhouse/src/greenhouse_wasm.cpp`
 (`CO2_*`, `CH4_*`) and `GRID` in `interface/greenhouse/greenhouse.ts` (it sets the slider ranges in
 `app/simulations/greenhouse/page.tsx`). Rebuild the WASM afterwards. At runtime the binding also reads the range from

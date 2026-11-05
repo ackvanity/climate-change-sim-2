@@ -7,26 +7,11 @@
 
 namespace CKD
 {
-
-// Set to 1 to evaluate the Faddeeva function to machine precision and compare the relative error of the approximated profile and the reference profile, and logs maximum
-// Set to 2 to compute the relative error and create a frequency distribution of errors
-// Set to -1 to force using the Faddeeva function to machine precision
 #define VOIGT_PROFILE_TEST_ACCURACY 0
 
   struct Line
   {
     double nu, sw, gamma_air, gamma_self, elower, n_air;
-  };
-
-  struct LineCompute
-  {
-    double nu;
-    double S_T;
-    double y;
-
-    LineCompute(double nu, double S_T, double y) : nu(nu), S_T(S_T), y(y)
-    {
-    }
   };
 
   struct CKD
@@ -924,7 +909,7 @@ namespace Greenhouse
 
   std::mutex stdout_mutex;
 
-  std::vector<double> compute_atmosphere(double co2, double ch4, Eigen::VectorXd &T, bool reset = false)
+  std::vector<double> compute_atmosphere(double co2, double ch4, Eigen::VectorXd &T, bool reset = false, double tol = 1e-7, double min_dt = 1e-12)
   {
     constexpr int n = 81;
     constexpr double T_MIN = 160;
@@ -966,7 +951,7 @@ namespace Greenhouse
     {
       Eigen::VectorXd delta = E.cwiseProduct(C) * dt;
 
-      if (mag < 1e-7 || dt < 1e-12)
+      if (mag < tol || dt < min_dt)
       {
         stopped_because_of_reps = false;
         break;
@@ -995,11 +980,11 @@ namespace Greenhouse
       if ((reps % 50) == 0)
       {
         std::lock_guard<std::mutex> lock(stdout_mutex);
-        std::cerr << "REPETITION " << reps << " / 50000" << std::endl;
+        std::cerr << "REPETITION " << reps << " / 50000 | " << mag << std::endl;
       }
     }
 
-    if (stopped_because_of_reps || (mag > 1e-7))
+    if (stopped_because_of_reps || (mag > tol))
     {
       std::lock_guard<std::mutex> lock(stdout_mutex);
       std::cerr << "WARNING: iteration stopped prematurely.\n"
@@ -1043,7 +1028,10 @@ namespace Greenhouse
     compute_planck();
     compute_afgl();
     fit_params();
+  }
 
+  void compute()
+  {
     std::vector<std::thread> threads;
 
     for (int ch4_idx = 0; ch4_idx < 7; ch4_idx++)
@@ -1062,10 +1050,12 @@ namespace Greenhouse
 
 }
 
-#ifndef GREENHOUSE_AS_LIBRARY // defined by interface/greenhouse/src/greenhouse_wasm.cpp
+// TODO: make a separate header file
+#ifndef GREENHOUSE_AS_LIBRARY // defined by other files importing this as a library
 int main()
 {
   // CKD::compute_ckd();
   Greenhouse::init();
+  Greenhouse::compute();
 }
 #endif

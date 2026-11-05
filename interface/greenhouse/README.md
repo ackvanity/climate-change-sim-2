@@ -7,7 +7,7 @@ The browser does not solve anything. The offline run writes a table of equilibri
 grid; on launch the binding fetches it, a small WASM module decodes it, and `solve()` is a bilinear lookup.
 
 ```
-compute/greenhouse/precompute.cpp --(Greenhouse::init, offline)--> precompute_bin/final_result.bin
+compute/greenhouse/greenhouse.cpp --(Greenhouse::compute, offline)--> precompute_bin/final_result.bin
                                                                               | cp (see compute/greenhouse/INTERFACE.md)
                                                                               v
                                                public/data/greenhouse/final_result.bin --(fetch on launch)--+
