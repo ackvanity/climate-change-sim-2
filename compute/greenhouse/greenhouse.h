@@ -70,10 +70,11 @@ namespace Greenhouse
     @param T vector of size `NUM_SLABS+1`, containing temperature of surface and slabs in Kelvin, starting from the slabs in increasing height and then the Earth's surface last
     @param co2 The VMR of carbon dioxide
     @param ch4 The VMR of methane
+    @param add_convection Whether to add convective adjustment. Default is true.
 
     @return A vector of size `NUM_SLABS+1` containing the error for each slab and surface, in the same order as passed to `T` (see above)
   */
-  std::vector<double> compute_energy_error(std::vector<double> T, double co2, double ch4);
+  std::vector<double> compute_energy_error(std::vector<double> T, double co2, double ch4, bool add_convection = true);
 
   // Fits inject_flux to AFGL baseline
   void fit_params();

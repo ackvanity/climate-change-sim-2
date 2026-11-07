@@ -1,12 +1,18 @@
+
+#ifndef GREENHOUSE_CONFIG_H
+#define GREENHOUSE_CONFIG_H
 #include <algorithm>
 #include <iterator>
 #include <cmath>
 
-#ifndef GREENHOUSE_CONFIG_H
-#define GREENHOUSE_CONFIG_H
-
 namespace Config
 {
+  // The number of threads to parallelize precomputation, EXCLUDING the main thread(s)
+  // Adjust to the number of threads available
+  // By default uses N-1 threads if N threads are available
+  // If the number of threads is not well-defined, uses a single compute thread
+  inline int NUM_THREADS = std::max<int>(((int)std::thread::hardware_concurrency()) - 1, 1);
+
   constexpr int NUM_G_POINTS = 16;
 
   constexpr double G_NODES[16] = {

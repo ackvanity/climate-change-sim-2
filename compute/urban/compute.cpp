@@ -10,7 +10,7 @@ namespace Urban
     Simulation *simulation;
 
     Cell *grid; // We use a multi-slot system
-    int slots;
+    uint slots;
     int rows;
     int cols;
     int current_slot = 0;
@@ -29,14 +29,15 @@ namespace Urban
     void update(Cell &left, Cell &top, Cell &bottom, Cell &right, Cell &current, Cell &updated, double S_in)
     {
       updated.T = 0;
-      updated.T -= get_heat_transfer_rate(current.T);
+      updated.T += get_heat_transfer_rate(current.T);
+      updated.T += K_SENSIBLE * simulation->celldata_hot[current.type].k_surface_factor * (T_ATMOSPHERE - current.T);
       updated.T += S_in * (1 - simulation->celldata_hot[current.type].albedo);
-      updated.T += (left.T - current.T) * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[left.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T += (top.T - current.T) * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[top.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T += (bottom.T - current.T) * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[bottom.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T += (right.T - current.T) * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[right.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
+      updated.T += (left.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[left.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
+      updated.T += (top.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[top.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
+      updated.T += (bottom.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[bottom.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
+      updated.T += (right.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[right.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
       updated.T *= simulation->dt;
-      updated.T /= simulation->celldata_hot[current.type].heat_capacity;
+      updated.T /= simulation->celldata_hot[current.type].heat_capacity * GRID_SIZE * GRID_SIZE * GRID_HEIGHT;
       updated.T += current.T;
     }
 
@@ -44,9 +45,9 @@ namespace Urban
     {
       int prev_slot = current_slot;
       current_slot++;
-      current_slot %= SLOTS;
+      current_slot %= slots;
 
-      double S_in = std::max(cos((18 - 6) / 12 * M_PI) * simulation->S0 / 4, 0.0);
+      double S_in = std::max(sin((simulation->time_of_day - 6) / 12 * M_PI) * simulation->S0 * sin(this->simulation->azimuth), 0.0);
       for (unsigned int i = 0; i < rows; i++)
       {
         for (unsigned int j = 0; j < cols; j++)
@@ -62,7 +63,7 @@ namespace Urban
       }
 
       simulation->time_of_day += simulation->dt / (60 * 60);
-      while (simulation->time_of_day > 24)
+      while (simulation->time_of_day >= 24)
         simulation->time_of_day -= 24;
     }
 
@@ -81,7 +82,7 @@ namespace Urban
 
       for (int i = 0; i < HEAT_TRANSFER_RATE_T_STEPS; i++)
       {
-        heat_transfer_rate_t[i] = std::lerp(std::lerp(heat_transfer_rate_main_t[ch4_idx][co2_idx][i], heat_transfer_rate_main_t[ch4_idx + 1][co2_idx][i], ch4_frac), std::lerp(heat_transfer_rate_main_t[ch4_idx][co2_idx + 1][i], heat_transfer_rate_main_t[ch4_idx + 1][co2_idx + 1][i], ch4_frac), co2_idx);
+        heat_transfer_rate_t[i] = std::lerp(std::lerp(heat_transfer_rate_main_t[ch4_idx][co2_idx][i], heat_transfer_rate_main_t[ch4_idx + 1][co2_idx][i], ch4_frac), std::lerp(heat_transfer_rate_main_t[ch4_idx][co2_idx + 1][i], heat_transfer_rate_main_t[ch4_idx + 1][co2_idx + 1][i], ch4_frac), co2_frac);
       }
     }
 
@@ -104,8 +105,19 @@ namespace Urban
       rebuild_heat_transfer_rate_t();
     }
 
-    Impl(int rows, int cols, double co2_ppm, double ch4_ppm, double dt, double S0, int slots, Simulation *simulation)
+    int getRows()
     {
+      return rows;
+    }
+    int getCols()
+    {
+      return cols;
+    }
+
+    Impl(int rows, int cols, double azimuth, double co2_ppm, double ch4_ppm, double dt, double S0, uint slots, Simulation *simulation)
+    {
+      if (slots <= 1)
+        throw std::invalid_argument("Number of slots must be at least 2.");
       this->simulation = simulation;
       this->rows = rows;
       this->cols = cols;
@@ -116,8 +128,15 @@ namespace Urban
       this->simulation->dt = dt;
       this->simulation->S0 = S0;
       this->simulation->time_of_day = 0;
+      this->simulation->azimuth = azimuth;
 
       grid = new Cell[slots * rows * cols];
+      rebuild_heat_transfer_rate_t();
+    }
+
+    ~Impl()
+    {
+      delete[] grid;
     }
   };
 
@@ -126,9 +145,64 @@ namespace Urban
     return &this->impl->grid[this->impl->current_slot * this->impl->rows * this->impl->cols];
   }
 
-  Simulation::Simulation(int rows, int cols, double co2_ppm, double ch4_ppm, double dt, double S0, int slots)
+  Simulation::Simulation(Simulation &&sim)
   {
-    this->impl.reset(new Impl(rows, cols, co2_ppm, ch4_ppm, dt, S0, slots, this));
+    this->impl = std::move(sim.impl);
+    this->impl->simulation = this;
+    this->dt = sim.dt;
+    this->S0 = sim.S0;
+    this->time_of_day = sim.time_of_day;
+    this->azimuth = sim.azimuth;
+    memcpy(this->celldata_cold, sim.celldata_cold, sizeof celldata_cold);
+    memcpy(this->celldata_hot, sim.celldata_hot, sizeof celldata_hot);
+  }
+
+  Simulation::Simulation(int rows, int cols, double azimuth, double co2_ppm, double ch4_ppm, double dt, double S0, uint slots)
+  {
+    this->impl.reset(new Impl(rows, cols, azimuth, co2_ppm, ch4_ppm, dt, S0, slots, this));
+
+    const double NU = 15000;
+
+    // Initialize data
+    celldata_cold[0].name = "Asphalt";
+    celldata_cold[0].color = "oklch(0.372 0.044 257.29)";
+
+    celldata_hot[0].albedo = 0.04;
+    celldata_hot[0].k_lateral = 0.75 * NU;
+    celldata_hot[0].heat_capacity = 1200000;
+    celldata_hot[0].k_surface_factor = 1.38;
+
+    celldata_cold[1].name = "Concrete";
+    celldata_cold[1].color = "oklch(86.9% 0.022 252.894)";
+
+    celldata_hot[1].albedo = 0.30;
+    celldata_hot[1].k_lateral = 0.60 * NU;
+    celldata_hot[1].heat_capacity = 10000000;
+    celldata_hot[1].k_surface_factor = 1.25;
+
+    celldata_cold[2].name = "Grass";
+    celldata_cold[2].color = "#b1d084";
+
+    celldata_hot[2].albedo = 0.25;
+    celldata_hot[2].k_lateral = 0.30 * NU;
+    celldata_hot[2].heat_capacity = 800000;
+    celldata_hot[2].k_surface_factor = 0.97;
+
+    celldata_cold[3].name = "Forest";
+    celldata_cold[3].color = "#4a6f15";
+
+    celldata_hot[3].albedo = 0.15;
+    celldata_hot[3].k_lateral = 0.30 * NU;
+    celldata_hot[3].heat_capacity = 900000;
+    celldata_hot[3].k_surface_factor = 0.83;
+
+    celldata_cold[4].name = "Water";
+    celldata_cold[4].color = "#4a6f15";
+
+    celldata_hot[4].albedo = 0.06;
+    celldata_hot[4].k_lateral = 0.60 * NU;
+    celldata_hot[4].heat_capacity = 4000000;
+    celldata_hot[4].k_surface_factor = 1.66;
   }
 
   int Simulation::getSlots()
@@ -156,8 +230,29 @@ namespace Urban
     return this->impl->setCh4_ppm(ch4_ppm);
   }
 
+  int Simulation::getRows()
+  {
+    return this->impl->getRows();
+  }
+
+  int Simulation::getCols()
+  {
+    return this->impl->getCols();
+  }
+
   void Simulation::step()
   {
     this->impl->step();
+  }
+
+  Simulation::~Simulation()
+  {
+    if (this->impl)
+      this->impl.get_deleter()(this->impl.get());
+  }
+
+  double *get_heat_transfer_rate_t_ptr()
+  {
+    return &heat_transfer_rate_main_t[0][0][0];
   }
 }

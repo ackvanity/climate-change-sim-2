@@ -256,7 +256,7 @@ namespace Greenhouse
   }
 
   // convention: Earth's temperature dead last, lowest height first
-  std::vector<double> compute_energy_error(std::vector<double> T, double co2, double ch4)
+  std::vector<double> compute_energy_error(std::vector<double> T, double co2, double ch4, bool add_convection)
   {
     const double T_E = T.back();
     const double albedo = 0.3;
@@ -395,15 +395,18 @@ namespace Greenhouse
       // std::cout << idx << " " << fluxes[idx] << std::endl;
     }
     T.insert(T.begin(), T_E);
-    for (int idx = 0; idx <= (fluxes.size() - 2); idx++)
+    if (add_convection)
     {
+      for (int idx = 0; idx <= (fluxes.size() - 2); idx++)
+      {
 
-      double delta = (T[idx] - T[idx + 1] - 6.5);
-      const double w = 0.3;
-      double F = 300 * ((delta < 0) ? 0 : ((delta > w) ? (delta - w * 0.5) : (delta * delta / (w * 2))));
+        double delta = (T[idx] - T[idx + 1] - 6.5);
+        const double w = 0.3;
+        double F = 300 * ((delta < 0) ? 0 : ((delta > w) ? (delta - w * 0.5) : (delta * delta / (w * 2))));
 
-      if (F > 0)
-        fluxes[idx + 1] += F, fluxes[idx] -= F;
+        if (F > 0)
+          fluxes[idx + 1] += F, fluxes[idx] -= F;
+      }
     }
     for (int idx = 0; idx < std::min(fluxes.size(), inject_flux.size()); idx++)
       fluxes[idx] += inject_flux[idx];

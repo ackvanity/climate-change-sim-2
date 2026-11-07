@@ -334,7 +334,7 @@ namespace CKD
     compute_idx = 0;
     completed = 0;
     auto start = std::chrono::steady_clock::now();
-    int num_threads = std::thread::hardware_concurrency();
+    int num_threads = Config::NUM_THREADS;
     std::vector<std::thread> threads;
     for (int i = 0; i < num_threads; i++)
     {

@@ -1,28 +1,29 @@
+#ifndef URBAN_H
+#define URBAN_h
+
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace Urban
 {
 
   constexpr int NUM_CELL_TYPES = 10;
+  constexpr double K_SENSIBLE = 14.0792;
+  constexpr double T_ATMOSPHERE = 281.7;
 
   struct CellData_Hot
   {
     double albedo;
     double k_lateral;
+    double k_surface_factor;
     double heat_capacity;
-  };
-
-  struct Color
-  {
-    std::uint16_t R, G, B;
-    std::uint16_t A = 255U;
   };
 
   struct CellData_Cold
   {
     std::string name;
-    Color color;
+    std::string color;
   };
 
   struct Cell
@@ -39,7 +40,6 @@ namespace Urban
 
   constexpr double GRID_SIZE = 10;  // in meters
   constexpr double GRID_HEIGHT = 5; // in meters
-  constexpr int SLOTS = 2;
 
   class Simulation
   {
@@ -67,7 +67,7 @@ namespace Urban
     double dt;          // Time-step of simulation in seconds
     double S0;          // Solar constant in W m^-2
     double time_of_day; // Time of day in hours
-    double azimut;      // Azimuth angle -- 0 or PI at a pole, PI/2 at equator
+    double azimuth;     // Azimuth angle -- 0 or PI at a pole, PI/2 at equator
 
     // Uses getter/setters because we need to change the heat transfer tables
 
@@ -87,10 +87,14 @@ namespace Urban
     // Runs a single step of the simulation
     void step();
 
-    Simulation(int rows, int cols, double co2_ppm = 420, double ch4_ppm = 1, double dt = 600, double S0 = 1361, int slots = 2);
+    Simulation(int rows, int cols, double azimuth, double co2_ppm = 420, double ch4_ppm = 1, double dt = 600, double S0 = 1361, uint slots = 2);
+    Simulation(Simulation &&);
+    ~Simulation();
 
   private:
     struct Impl;
     std::unique_ptr<Impl> impl;
   };
 }
+
+#endif
