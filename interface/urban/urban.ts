@@ -55,11 +55,11 @@ export const GRID = {
 } as const;
 
 /** `7 × 21 × 600` little-endian doubles. */
-const TABLE_BYTES = 7 * 21 * 600 * 8;
+const TABLE_BYTES = 7 * 21 * 60 * 8;
 /** Solar constant in W/m², as the solver expects. */
 export const SOLAR_CONSTANT = 1361;
 /** Time step of the simulation in seconds. */
-export const TIME_STEP_S = 600;
+export const TIME_STEP_S = 100;
 /**
  * Latitude at which the mean daily sunlight equals the global mean the heat-transfer table was calibrated for
  * (S0/π · cos φ = S0/4 → φ ≈ 38°, mid-latitudes like the US Standard Atmosphere).

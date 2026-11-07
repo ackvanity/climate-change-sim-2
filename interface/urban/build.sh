@@ -14,7 +14,7 @@ OUT=public/wasm/urban
 mkdir -p "$OUT"
 
 em++ interface/urban/src/urban_wasm.cpp compute/urban/compute.cpp \
-  -std=c++20 -O3 -Iinterface/urban/shim -Duint=unsigned \
+  -std=c++20 -O3 -ffast-math -Iinterface/urban/shim -Duint=unsigned \
   -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createUrban \
   -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH \

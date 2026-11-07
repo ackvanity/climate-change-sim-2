@@ -33,13 +33,13 @@ namespace Urban
   };
 
   constexpr double HEAT_TRANSFER_RATE_T_START = 100;
-  constexpr double HEAT_TRANSFER_RATE_T_STEP = 0.5;
-  constexpr int HEAT_TRANSFER_RATE_T_STEPS = 600;
+  constexpr double HEAT_TRANSFER_RATE_T_STEP = 5;
+  constexpr int HEAT_TRANSFER_RATE_T_STEPS = 60;
 
   extern double heat_transfer_rate_main_t[7][21][HEAT_TRANSFER_RATE_T_STEPS];
 
-  constexpr double GRID_SIZE = 10;  // in meters
-  constexpr double GRID_HEIGHT = 5; // in meters
+  constexpr double GRID_SIZE = 2;   // in meters
+  constexpr double GRID_HEIGHT = 2; // in meters
 
   class Simulation
   {
@@ -95,7 +95,7 @@ namespace Urban
     // Runs a single step of the simulation
     void step();
 
-    Simulation(int rows, int cols, double azimuth, double co2_ppm = 420, double ch4_ppm = 1, double dt = 600, double S0 = 1361, uint slots = 2);
+    Simulation(int rows, int cols, double azimuth, double co2_ppm = 420, double ch4_ppm = 1, double dt = 30, double S0 = 1361, uint slots = 2);
     Simulation(Simulation &&) = delete;
     ~Simulation();
 

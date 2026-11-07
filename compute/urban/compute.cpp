@@ -160,7 +160,7 @@ namespace Urban
   {
     this->impl.reset(new Impl(rows, cols, azimuth, co2_ppm, ch4_ppm, dt, S0, slots, this));
 
-    const double NU = 500;
+    const double NU = 15000;
 
     // Initialize data
     celldata_cold[0].name = "Asphalt";
