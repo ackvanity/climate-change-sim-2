@@ -10,3 +10,6 @@
 [submodule "dependencies/eigen"]
 	path = dependencies/eigen
 	url = https://gitlab.com/libeigen/eigen.git
+[submodule "dependencies/tqdm"]
+	path = dependencies/tqdm
+	url = https://github.com/mraggi/tqdm-cpp
