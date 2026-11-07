@@ -53,9 +53,17 @@ namespace Urban
       Gets the current grid
 
       @returns A pointer to a 2D array with dimension ROWS x COLS containing Cell objects.
-      @note The simulation uses a buffer of a certain length (returned by `getSlots()`). This pointer's data will be overwritten when `step()` is called the `getSlots()`th time after the pointer is returned. If you need to keep stale data longer, use more slots.
+      @note The simulation uses a buffer of a certain length (returned by `getSlots()`). This pointer's data will be overwritten when `step()` is called the `getSlots()`th time after the pointer is returned, **or immediately after `propogateChanges()` is called**. If you need to keep stale data longer, use more slots.
     */
     Cell *getCurrentGrid();
+
+    /*
+      Propogates changes on the current grid to every other grid.
+
+      @note Will overwrite data on *all* slots, and thus pointers returned by `getCurrentGrid()`
+    */
+
+    void propogateChanges();
 
     // How many slots are available. Minimum and default value is 2.
     int getSlots();
@@ -88,7 +96,7 @@ namespace Urban
     void step();
 
     Simulation(int rows, int cols, double azimuth, double co2_ppm = 420, double ch4_ppm = 1, double dt = 600, double S0 = 1361, uint slots = 2);
-    Simulation(Simulation &&);
+    Simulation(Simulation &&) = delete;
     ~Simulation();
 
   private:

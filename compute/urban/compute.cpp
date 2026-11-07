@@ -145,11 +145,22 @@ namespace Urban
     return &this->impl->grid[this->impl->current_slot * this->impl->rows * this->impl->cols];
   }
 
+  void Simulation::propogateChanges()
+  {
+    Cell *ptr = getCurrentGrid();
+    for (int slot = 0; slot < this->impl->slots; slot++)
+    {
+      if (slot == this->impl->current_slot)
+        continue;
+      memcpy(&this->impl->grid[slot * this->impl->rows * this->impl->cols], ptr, (sizeof(Cell)) * this->impl->rows * this->impl->cols);
+    }
+  }
+
   Simulation::Simulation(int rows, int cols, double azimuth, double co2_ppm, double ch4_ppm, double dt, double S0, uint slots)
   {
     this->impl.reset(new Impl(rows, cols, azimuth, co2_ppm, ch4_ppm, dt, S0, slots, this));
 
-    const double NU = 15000;
+    const double NU = 500;
 
     // Initialize data
     celldata_cold[0].name = "Asphalt";
@@ -165,7 +176,7 @@ namespace Urban
 
     celldata_hot[1].albedo = 0.30;
     celldata_hot[1].k_lateral = 0.60 * NU;
-    celldata_hot[1].heat_capacity = 100000;
+    celldata_hot[1].heat_capacity = 1000000;
     celldata_hot[1].k_surface_factor = 1.25;
 
     celldata_cold[2].name = "Grass";
