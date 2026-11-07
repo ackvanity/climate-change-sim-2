@@ -61,6 +61,13 @@ Tags (either may be absent when unknown):
 
 ## urban
 
+- 2026-11-07 — [Experiment] [Claude] — Checked the page in the browser (webpack dev server from the worktree: Turbopack rejects the symlinked `node_modules`): painting, play/pause at 24 steps/s on 500 × 500, colour maps, hover readout, history with free axes and two Y axes. Found and fixed three page bugs on the way: an update loop (`materials` was a new array on every reset), canvases sized from non-state, and a history that never refreshed (same array passed to `setState`). The run still diverges around hour 2 (the Dev is debugging it): playback stops and a banner explains.
+- 2026-11-07 — [Production] [Claude] — Added `app/simulations/urban/` (`page.tsx`, `use-urban.ts`): left sidebar with the CO₂/CH₄ sliders, run controls (play, step, speed, latitude, grid size), the brush tool and the heatmap colour settings; main area with three tabs (grid editor, temperature map, history). Added an Urban card to the landing page.
+- 2026-11-07 — [Production] [Claude] — Shared components for the history tab: `variable-plot.tsx` gets `mode="line"` and grouped selector options (`PlotVariable.group`); `chart.tsx` turns non-finite values into gaps.
+- 2026-11-07 — [Production] [Claude] — Added `interface/urban/`: `src/urban_wasm.cpp` (C ABI over `compute.cpp`: create, step, paint into every slot, stats, RGBA rendering), `build.sh` (needs a `<bits/stdc++.h>` shim and `-Duint=unsigned` for Emscripten), `urban.ts` binding, `README.md`; copied the table to `public/data/urban/`.
+- 2026-11-07 — [Experiment] [Claude] — Benchmarked the solver at 500 × 500 with the real table: native 3.1 ms/step (`-O2`, ~80 M cell updates/s), WASM in Node 2.57 ms/step, stats 0.63 ms and render 0.73 ms per call. Painting survives steps in both slots. The run diverges within the first 6 simulated hours (found, not diagnosed).
+- 2026-11-07 — [Production] [Dev] — Edited `compute.cpp` and `urban.h` (uncommitted): `~Simulation() = default`, include guard fixed, move constructor removed, thermal-mass divisor now `heat_capacity * GRID_HEIGHT`, concrete heat capacity 1e5.
+- 2026-11-07 — [Production] [Dev] — Committed `e034016` and `89e5478`: threaded table builder (`precompute.cpp`, infrared-only table, `k_sensible` moved into the sim), `Simulation` class with premade materials, per-material `k_surface_factor`, table pointer for JS, `heat_transfer_rate.bin`.
 - 2026-10-31 — [Production] — `compute/urban/main.cpp` started: 500 × 500 grid, per-type cell data (albedo, conductivity, heat capacity), empty `main`.
 
 ## grid

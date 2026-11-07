@@ -385,6 +385,12 @@ export function Chart({
 function toData(x: ChartValues, series: ChartSeries[]): uPlot.AlignedData {
   return [
     Array.from(x) as number[],
-    ...series.map((s) => Array.from(s.y) as (number | null)[]),
+    // Non-finite values (e.g. a group with no cells yet) become gaps instead of breaking the paths.
+    ...series.map(
+      (s) =>
+        Array.from(s.y, (v) =>
+          v != null && !Number.isFinite(v) ? null : v
+        ) as (number | null)[]
+    ),
   ];
 }

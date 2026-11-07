@@ -87,6 +87,12 @@ export default function Home() {
               assumenda, eius necessitatibus rem ipsa! Vero, possimus!
             </p>
           </Card>
+          <Card title="Urban Heat Island" simulation="/simulations/urban">
+            <p>
+              Paint a city from asphalt, concrete, grass, forest and water, then
+              watch how each material heats up and cools down over the day.
+            </p>
+          </Card>
         </Collapsible>
       </main>
       <footer className="w-full px-32">

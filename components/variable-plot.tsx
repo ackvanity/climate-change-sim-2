@@ -8,6 +8,8 @@ export interface PlotVariable {
   unit: string;
   /** Digits after the decimal point in tick labels and the legend. */
   decimals: number;
+  /** Heading the variable is listed under in the selectors. Variables without one are listed first, ungrouped. */
+  group?: string;
 }
 
 /** The variables on the chart's axes; `y2` is `''` for none. */
@@ -38,6 +40,8 @@ export interface VariablePlotProps<K extends string> {
   caption?: (count: number) => React.ReactNode;
   /** Plot height in px. */
   height?: number;
+  /** `points` (default) draws dots; `line` joins them in ascending order of X, e.g. for a history over time. */
+  mode?: 'points' | 'line';
 }
 
 /**
@@ -57,6 +61,7 @@ export function VariablePlot<K extends string>({
   clearLabel = 'Clear',
   caption,
   height = 480,
+  mode = 'points',
 }: VariablePlotProps<K>) {
   const [inner, setInner] = useState<PlotAxes<K>>({
     x: defaultX,
@@ -86,7 +91,9 @@ export function VariablePlot<K extends string>({
 
   const x = useMemo(() => sorted.map((s) => s[xKey]), [sorted, xKey]);
   const series = useMemo<ChartSeries[]>(() => {
-    const dots = { line: false, points: 7 } as const;
+    const dots = (
+      mode === 'line' ? { points: false } : { line: false, points: 7 }
+    ) as Pick<ChartSeries, 'line' | 'points'>;
     const out: ChartSeries[] = [
       {
         id: 'y',
@@ -104,7 +111,7 @@ export function VariablePlot<K extends string>({
         ...dots,
       });
     return out;
-  }, [variables, sorted, yKey, y2Key]);
+  }, [variables, sorted, yKey, y2Key, mode]);
 
   const text = useMemo(
     () => ({
@@ -183,6 +190,15 @@ function VariableSelect<K extends string, V extends K | ''>({
   onChange: (v: V) => void;
   allowNone?: boolean;
 }) {
+  // Keys in their given order, collected under their group heading ('' = ungrouped, listed first).
+  const groups = useMemo(() => {
+    const map = new Map<string, K[]>([['', []]]);
+    for (const k of Object.keys(options) as K[]) {
+      const g = options[k].group ?? '';
+      map.set(g, [...(map.get(g) ?? []), k]);
+    }
+    return [...map].filter(([, keys]) => keys.length > 0);
+  }, [options]);
   return (
     <label className="flex flex-col gap-1 text-sm font-medium">
       {label}
@@ -192,11 +208,20 @@ function VariableSelect<K extends string, V extends K | ''>({
         className="rounded border border-slate-300 bg-white px-2 py-1 font-normal"
       >
         {allowNone && <option value="">None</option>}
-        {(Object.keys(options) as K[]).map((k) => (
-          <option key={k} value={k}>
-            {options[k].label}
-          </option>
-        ))}
+        {groups.map(([group, keys]) => {
+          const items = keys.map((k) => (
+            <option key={k} value={k}>
+              {options[k].label}
+            </option>
+          ));
+          return group ? (
+            <optgroup key={group} label={group}>
+              {items}
+            </optgroup>
+          ) : (
+            items
+          );
+        })}
       </select>
     </label>
   );

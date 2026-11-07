@@ -4,18 +4,18 @@ Each simulation is a "project". Its **code** is the short lowercase name used fo
 
 ## Overview
 
-| Simulation                         | Code         | Stage                                                     |
-| ---------------------------------- | ------------ | --------------------------------------------------------- |
-| Greenhouse Effect / Global Warming | `greenhouse` | Working end to end (precompute → WASM → UI)               |
-| Urban Heat (cell-grid heat model)  | `urban`      | Started: data structures only in `compute/urban/main.cpp` |
-| Electric Grid                      | `grid`       | Prototype, unrelated to the others                        |
+| Simulation                         | Code         | Stage                                                       |
+| ---------------------------------- | ------------ | ----------------------------------------------------------- |
+| Greenhouse Effect / Global Warming | `greenhouse` | Working end to end (precompute → WASM → UI)                 |
+| Urban Heat (cell-grid heat model)  | `urban`      | Solver → WASM → UI wired; the run diverges (being debugged) |
+| Electric Grid                      | `grid`       | Prototype, unrelated to the others                          |
 
 ## Code locations
 
 | Code         | `compute/`                          | `interface/`                                | `app/simulations/`            | `workpad/`            |
 | ------------ | ----------------------------------- | ------------------------------------------- | ----------------------------- | --------------------- |
 | `greenhouse` | `compute/greenhouse/` (C++, Python) | `interface/greenhouse/` (WASM + TS binding) | `app/simulations/greenhouse/` | `workpad/greenhouse/` |
-| `urban`      | `compute/urban/` (C++)              | —                                           | —                             | `workpad/urban/`      |
+| `urban`      | `compute/urban/` (C++)              | `interface/urban/` (WASM + TS binding)      | `app/simulations/urban/`      | `workpad/urban/`      |
 | `grid`       | `compute/grid/` (Python)            | —                                           | —                             | —                     |
 
 ## Key files
@@ -30,5 +30,8 @@ Each simulation is a "project". Its **code** is the short lowercase name used fo
 | `greenhouse` | `interface/greenhouse/src/greenhouse_wasm.cpp` | Decodes and bilinearly interpolates the table                                                        |
 | `greenhouse` | `interface/greenhouse/greenhouse.ts`           | Typed binding, `GRID` = range of the table                                                           |
 | `greenhouse` | `app/simulations/greenhouse/page.tsx`          | The simulation page                                                                                  |
-| `urban`      | `compute/urban/main.cpp`                       | Cell and per-type data structures (albedo, conductivity, heat capacity)                              |
+| `urban`      | `compute/urban/compute.cpp`, `urban.h`         | `Urban::Simulation`: cell grid, per-material albedo/conduction/heat capacity, explicit time stepping |
+| `urban`      | `compute/urban/precompute.cpp`                 | Builds `heat_transfer_rate.bin` (ground infrared gain vs T, CO₂, CH₄; atmosphere fixed)              |
+| `urban`      | `interface/urban/`                             | `urban_wasm.cpp` (C ABI), `build.sh`, `urban.ts` binding, `README.md` (data contract)                |
+| `urban`      | `app/simulations/urban/page.tsx`               | The page: sidebar utilities, grid editor, temperature map, history                                   |
 | `grid`       | `compute/grid/`                                | Circuit-simulation prototype                                                                         |
