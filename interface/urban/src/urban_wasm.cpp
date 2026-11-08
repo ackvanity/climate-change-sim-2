@@ -2,9 +2,9 @@
 // There is exactly one simulation at a time (ur_create replaces it). Everything crosses the boundary as numbers and
 // pointers into WASM memory; urban.ts is the typed side of this file.
 //
-// The solver's update() does not copy Cell::type into the slot it writes, so the types must be present in every slot
-// (see urban.h). This file therefore owns that: it learns the address of each slot once, at creation, and edits
-// (paint / fill / load) write the types into all of them.
+// The solver keeps the material of every cell in one array (`getCellTypes()`) and derives per-cell constants from it
+// in `syncCellTypes()` (which also bakes in `dt`). Edits here only mark that state `dirty`; the sync runs once, lazily,
+// before the next step, so a brush stroke of many ur_paint calls costs one pass over the grid.
 #include <emscripten.h>
 
 #include <algorithm>
@@ -27,19 +27,24 @@ namespace
   constexpr double INITIAL_T = 288.0; // K, until the page says otherwise
   constexpr int GROUPS = Urban::NUM_CELL_TYPES + 1; // one per material, then the whole grid
   constexpr int STAT_FIELDS = 4;                    // min, max, mean, count
+  constexpr int MIN_SIZE = 3;                       // the edge handling in compute.cpp needs at least 3 rows and columns
+  constexpr int MAX_SIZE = 4096;
 
   std::unique_ptr<Urban::Simulation> sim;
-  std::vector<Urban::Cell *> slots; // slots[k] = grid of ring slot k (documented ring behaviour of step())
-  std::vector<uint8_t> image;       // RGBA output of ur_render
+  std::vector<uint8_t> image; // RGBA output of ur_render
   int rows = 0, cols = 0;
+  bool dirty = false; // cell types or dt changed since the last syncCellTypes()
 
   inline bool inGrid(int r, int c) { return r >= 0 && r < rows && c >= 0 && c < cols; }
+  inline long cells() { return (long)rows * cols; }
 
-  template <class F>
-  void forEachSlot(F f)
+  void ensureSynced()
   {
-    for (Urban::Cell *g : slots)
-      f(g);
+    if (sim && dirty)
+    {
+      sim->syncCellTypes();
+      dirty = false;
+    }
   }
 }
 
@@ -47,7 +52,7 @@ extern "C"
 {
   // ---- table -------------------------------------------------------------------------------------------------------
 
-  // Where JavaScript writes heat_transfer_rate.bin (little-endian doubles, [7 CH4][21 CO2][600 T]).
+  // Where JavaScript writes heat_transfer_rate.bin (little-endian doubles, [7 CH4][21 CO2][60 T], T from 100 K in 5 K steps).
   EMSCRIPTEN_KEEPALIVE double *ur_table_ptr() { return Urban::get_heat_transfer_rate_t_ptr(); }
   EMSCRIPTEN_KEEPALIVE int ur_table_bytes() { return (int)sizeof(Urban::heat_transfer_rate_main_t); }
 
@@ -57,37 +62,30 @@ extern "C"
   // `colatitude` in radians (pi/2 at the equator). Returns the slot count, or -1 for invalid arguments.
   EMSCRIPTEN_KEEPALIVE int ur_create(int r, int c, double colatitude, double co2Ppm, double ch4Ppm, double dt, double S0)
   {
-    if (r < 1 || c < 1 || r > 4096 || c > 4096)
+    if (r < MIN_SIZE || c < MIN_SIZE || r > MAX_SIZE || c > MAX_SIZE || !(dt > 0))
       return -1;
     sim.reset();
-    slots.clear();
     rows = r;
     cols = c;
     image.assign((size_t)r * c * 4, 255);
 
     sim = std::make_unique<Urban::Simulation>(r, c, colatitude, co2Ppm, ch4Ppm, dt, S0, 2u);
-    const int n = sim->getSlots();
-    // step() moves to the next slot of a ring, so n steps visit each slot once and return to the first. Every slot is
-    // initialised before it is read, then the clock is put back.
-    for (int k = 0; k < n; k++)
-    {
-      Urban::Cell *g = sim->getCurrentGrid();
-      slots.push_back(g);
-      for (long i = 0; i < (long)r * c; i++)
-      {
-        g[i].T = INITIAL_T;
-        g[i].type = 0;
-      }
-      sim->step();
-    }
+    // The solver leaves cell data uninitialised: set every cell, then derive the per-cell constants.
+    std::fill(sim->getCellTypes(), sim->getCellTypes() + cells(), (Urban::cell_type_t)0);
+    Urban::Cell *g = sim->getCurrentGrid();
+    for (long i = 0; i < cells(); i++)
+      g[i].T = INITIAL_T;
+    sim->propogateChanges();
+    sim->syncCellTypes();
+    dirty = false;
     sim->time_of_day = 0;
-    return n;
+    return sim->getSlots();
   }
 
   EMSCRIPTEN_KEEPALIVE void ur_destroy()
   {
     sim.reset();
-    slots.clear();
+    dirty = false;
   }
 
   // ---- stepping and parameters -------------------------------------------------------------------------------------
@@ -96,15 +94,21 @@ extern "C"
   {
     if (!sim)
       return;
+    ensureSynced();
     for (int i = 0; i < n; i++)
       sim->step();
   }
 
+  // dt is baked into the solver's per-cell constants, so changing it marks them stale.
   EMSCRIPTEN_KEEPALIVE void ur_set_params(double dt, double S0, double colatitude)
   {
     if (!sim)
       return;
-    sim->dt = dt;
+    if (dt > 0 && dt != sim->dt)
+    {
+      sim->dt = dt;
+      dirty = true;
+    }
     sim->S0 = S0;
     sim->azimuth = colatitude;
   }
@@ -130,18 +134,19 @@ extern "C"
 
   EMSCRIPTEN_KEEPALIVE int ur_type_count() { return Urban::NUM_CELL_TYPES; }
   // Empty name = the slot is not defined by the solver's premade set.
-  EMSCRIPTEN_KEEPALIVE const char *ur_type_name(int i) { return sim && i >= 0 && i < Urban::NUM_CELL_TYPES ? sim->celldata_cold[i].name.c_str() : ""; }
-  EMSCRIPTEN_KEEPALIVE const char *ur_type_color(int i) { return sim && i >= 0 && i < Urban::NUM_CELL_TYPES ? sim->celldata_cold[i].color.c_str() : ""; }
-  // out: albedo, k_lateral, k_surface_factor, heat_capacity
+  EMSCRIPTEN_KEEPALIVE const char *ur_type_name(int i) { return sim && i >= 0 && i < Urban::NUM_CELL_TYPES ? sim->celldata[i].name.c_str() : ""; }
+  EMSCRIPTEN_KEEPALIVE const char *ur_type_color(int i) { return sim && i >= 0 && i < Urban::NUM_CELL_TYPES ? sim->celldata[i].color.c_str() : ""; }
+  // out: albedo, k_lateral, k_surface_factor, heat_capacity, uses evapotranspiration (0 or 1)
   EMSCRIPTEN_KEEPALIVE void ur_type_hot(int i, double *out)
   {
     if (!sim || i < 0 || i >= Urban::NUM_CELL_TYPES)
       return;
-    const Urban::CellData_Hot &h = sim->celldata_hot[i];
-    out[0] = h.albedo;
-    out[1] = h.k_lateral;
-    out[2] = h.k_surface_factor;
-    out[3] = h.heat_capacity;
+    const Urban::CellData &d = sim->celldata[i];
+    out[0] = d.albedo;
+    out[1] = d.k_lateral;
+    out[2] = d.k_surface_factor;
+    out[3] = d.heat_capacity;
+    out[4] = d.param.use_et ? 1 : 0;
   }
 
   // ---- grid access -------------------------------------------------------------------------------------------------
@@ -151,19 +156,20 @@ extern "C"
   {
     if (!sim || !inGrid(r, c))
       return 0;
-    const Urban::Cell &cell = sim->getCurrentGrid()[(long)r * cols + c];
-    out[0] = cell.T;
-    out[1] = cell.type;
+    const long i = (long)r * cols + c;
+    out[0] = sim->getCurrentGrid()[i].T;
+    out[1] = sim->getCellTypes()[i];
     return 1;
   }
 
-  // ---- editing (types go into every slot) --------------------------------------------------------------------------
+  // ---- editing -----------------------------------------------------------------------------------------------------
 
   // Paints a disc (shape 0) or square (shape 1) of the given radius in cells, centred on (row, col), clipped to the grid.
   EMSCRIPTEN_KEEPALIVE void ur_paint(int r0, int c0, int radius, int type, int shape)
   {
     if (!sim || type < 0 || type >= Urban::NUM_CELL_TYPES)
       return;
+    Urban::cell_type_t *t = sim->getCellTypes();
     const int rad = std::max(radius, 0);
     for (int dr = -rad; dr <= rad; dr++)
       for (int dc = -rad; dc <= rad; dc++)
@@ -171,21 +177,18 @@ extern "C"
         if (shape == 0 && dr * dr + dc * dc > rad * rad + rad)
           continue;
         const int r = r0 + dr, c = c0 + dc;
-        if (!inGrid(r, c))
-          continue;
-        forEachSlot([&](Urban::Cell *g)
-                    { g[(long)r * cols + c].type = type; });
+        if (inGrid(r, c))
+          t[(long)r * cols + c] = (Urban::cell_type_t)type;
       }
+    dirty = true;
   }
 
   EMSCRIPTEN_KEEPALIVE void ur_fill(int type)
   {
     if (!sim || type < 0 || type >= Urban::NUM_CELL_TYPES)
       return;
-    forEachSlot([&](Urban::Cell *g)
-                {
-      for (long i = 0; i < (long)rows * cols; i++)
-        g[i].type = type; });
+    std::fill(sim->getCellTypes(), sim->getCellTypes() + cells(), (Urban::cell_type_t)type);
+    dirty = true;
   }
 
   // Sets every cell to the same temperature in K.
@@ -193,10 +196,10 @@ extern "C"
   {
     if (!sim)
       return;
-    forEachSlot([&](Urban::Cell *g)
-                {
-      for (long i = 0; i < (long)rows * cols; i++)
-        g[i].T = T; });
+    Urban::Cell *g = sim->getCurrentGrid();
+    for (long i = 0; i < cells(); i++)
+      g[i].T = T;
+    sim->propogateChanges();
   }
 
   // Copies rows*cols material ids (row-major, 1 byte each; out-of-range ids become 0) into the grid / reads them out.
@@ -204,18 +207,15 @@ extern "C"
   {
     if (!sim)
       return;
-    forEachSlot([&](Urban::Cell *g)
-                {
-      for (long i = 0; i < (long)rows * cols; i++)
-        g[i].type = types[i] < Urban::NUM_CELL_TYPES ? types[i] : 0; });
+    Urban::cell_type_t *t = sim->getCellTypes();
+    for (long i = 0; i < cells(); i++)
+      t[i] = types[i] < Urban::NUM_CELL_TYPES ? types[i] : 0;
+    dirty = true;
   }
   EMSCRIPTEN_KEEPALIVE void ur_read_types(uint8_t *out)
   {
-    if (!sim)
-      return;
-    const Urban::Cell *g = sim->getCurrentGrid();
-    for (long i = 0; i < (long)rows * cols; i++)
-      out[i] = (uint8_t)g[i].type;
+    if (sim)
+      std::memcpy(out, sim->getCellTypes(), (size_t)cells());
   }
 
   // ---- statistics --------------------------------------------------------------------------------------------------
@@ -238,7 +238,8 @@ extern "C"
     if (sim)
     {
       const Urban::Cell *grid = sim->getCurrentGrid();
-      for (long i = 0; i < (long)rows * cols; i++)
+      const Urban::cell_type_t *types = sim->getCellTypes();
+      for (long i = 0; i < cells(); i++)
       {
         const double T = grid[i].T;
         if (!std::isfinite(T))
@@ -246,7 +247,7 @@ extern "C"
           bad++;
           continue;
         }
-        const int t = grid[i].type;
+        const int t = types[i] < Urban::NUM_CELL_TYPES ? types[i] : 0;
         for (int g : {t, GROUPS - 1})
         {
           if (T < mn[g])
@@ -278,14 +279,15 @@ extern "C"
     if (!sim)
       return image.data();
     const Urban::Cell *g = sim->getCurrentGrid();
+    const Urban::cell_type_t *types = sim->getCellTypes();
     uint8_t *px = image.data();
-    const long n = (long)rows * cols;
+    const long n = cells();
     if (mode == 0)
     {
       for (long i = 0; i < n; i++)
       {
-        const int t = g[i].type;
-        std::memcpy(px + 4 * i, lut + 4 * (t >= 0 && t < Urban::NUM_CELL_TYPES ? t : 0), 4);
+        const int t = types[i];
+        std::memcpy(px + 4 * i, lut + 4 * (t < Urban::NUM_CELL_TYPES ? t : 0), 4);
       }
     }
     else

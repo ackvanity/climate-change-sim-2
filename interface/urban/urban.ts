@@ -54,12 +54,18 @@ export const GRID = {
   ch4Ppm: { min: 1.0, max: 4.0, step: 0.5 },
 } as const;
 
-/** `7 × 21 × 600` little-endian doubles. */
+/** `7 × 21 × 60` little-endian doubles: [CH₄][CO₂][T from 100 K in 5 K steps] (`HEAT_TRANSFER_RATE_T_*` in urban.h). */
 const TABLE_BYTES = 7 * 21 * 60 * 8;
 /** Solar constant in W/m², as the solver expects. */
 export const SOLAR_CONSTANT = 1361;
-/** Time step of the simulation in seconds. */
+/**
+ * Time step of the simulation in seconds. The solver is an explicit scheme: with the current materials it is stable
+ * only while `dt · (sum of a cell's lateral conductances) / (its heat capacity)` stays below 1, which is about 0.94
+ * for asphalt at 100 s. Check that number before raising this or changing the materials.
+ */
 export const TIME_STEP_S = 100;
+/** Width of one cell in metres (`GRID_SIZE` in urban.h). */
+export const CELL_SIZE_M = 2;
 /**
  * Latitude at which the mean daily sunlight equals the global mean the heat-transfer table was calibrated for
  * (S0/π · cos φ = S0/4 → φ ≈ 38°, mid-latitudes like the US Standard Atmosphere).
@@ -79,6 +85,8 @@ export interface Material {
   kLateral: number;
   kSurfaceFactor: number;
   heatCapacity: number;
+  /** Whether the solver adds Priestley–Taylor evapotranspiration for cells of this material. */
+  evapotranspiration: boolean;
 }
 
 export interface GroupStats {
@@ -160,12 +168,12 @@ export class Urban {
   private readMaterials(): Material[] {
     const m = this.m;
     const out: Material[] = [];
-    const hot = m._malloc(32);
+    const hot = m._malloc(40);
     for (let id = 0; id < m._ur_type_count(); id++) {
       const name = m.UTF8ToString(m._ur_type_name(id));
       if (!name) continue;
       m._ur_type_hot(id, hot);
-      const h = new Float64Array(m.HEAPF64.buffer, hot, 4);
+      const h = new Float64Array(m.HEAPF64.buffer, hot, 5);
       out.push({
         id,
         name,
@@ -174,6 +182,7 @@ export class Urban {
         kLateral: h[1],
         kSurfaceFactor: h[2],
         heatCapacity: h[3],
+        evapotranspiration: h[4] !== 0,
       });
     }
     m._free(hot);
@@ -340,10 +349,10 @@ async function init(): Promise<Urban> {
   m.HEAPU8.set(bytes, m._ur_table_ptr());
 
   const urban = new Urban(m);
-  // A tiny grid, so that the material list can be read before the page chooses its own size.
+  // A tiny grid (the solver needs at least 3 × 3), so that the material list can be read before the page chooses its own size.
   urban.reset({
-    rows: 1,
-    cols: 1,
+    rows: 3,
+    cols: 3,
     latitudeDeg: CALIBRATION_LATITUDE_DEG,
     co2Ppm: GRID.co2Ppm.min,
     ch4Ppm: GRID.ch4Ppm.min,

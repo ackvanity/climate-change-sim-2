@@ -19,6 +19,7 @@ import {
 } from '@/components/variable-plot';
 import {
   CALIBRATION_LATITUDE_DEG,
+  CELL_SIZE_M,
   GRID,
   INITIAL_TEMPERATURE_K,
   NUM_MATERIAL_IDS,
@@ -528,7 +529,7 @@ function UrbanApp({ urban }: { urban: Urban }) {
               onClick={stepOnce}
               disabled={playing || !!readout.diverged}
             >
-              Step 10 min
+              Step {TIME_STEP_S} s
             </ToolButton>
             <ToolButton onClick={() => (setPlaying(false), restart('city'))}>
               Restart
@@ -561,7 +562,7 @@ function UrbanApp({ urban }: { urban: Urban }) {
             >
               {GRID_SIZES.map((n) => (
                 <option key={n} value={n}>
-                  {n} × {n} cells ({n * 10} m × {n * 10} m)
+                  {n} × {n} cells ({n * CELL_SIZE_M} m × {n * CELL_SIZE_M} m)
                 </option>
               ))}
             </select>
@@ -604,6 +605,14 @@ function UrbanApp({ urban }: { urban: Urban }) {
                   style={{ background: swatch[m.id] }}
                 />
                 {m.name}
+                {m.evapotranspiration && (
+                  <span
+                    className="ml-auto text-xs opacity-80"
+                    title="Loses heat to evapotranspiration"
+                  >
+                    evaporates
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -943,7 +952,7 @@ function GridEditor({
     <div>
       <p className="mb-4 max-w-prose text-sm text-slate-600">
         Paint materials onto the grid with the brush in the sidebar. Each cell
-        is 10 m wide. Painting works while the simulation runs.
+        is {CELL_SIZE_M} m wide. Painting works while the simulation runs.
       </p>
       <div className="relative inline-block w-full max-w-[720px] overflow-hidden bg-slate-200">
         <canvas
