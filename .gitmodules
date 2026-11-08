@@ -13,3 +13,6 @@
 [submodule "dependencies/tqdm"]
 	path = dependencies/tqdm
 	url = https://github.com/mraggi/tqdm-cpp
+[submodule "dependencies/nanobench"]
+	path = dependencies/nanobench
+	url = https://github.com/martinus/nanobench

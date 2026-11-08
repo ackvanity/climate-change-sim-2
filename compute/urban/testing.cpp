@@ -13,8 +13,10 @@ int main()
     for (int j = 0; j < sim.getCols(); j++)
     {
       sim.getCurrentGrid()[i * sim.getCols() + j].T = Urban::T_ATMOSPHERE;
-      sim.getCurrentGrid()[i * sim.getCols() + j].type = rand() % 5;
+      sim.getCellTypes()[i * sim.getCols() + j] = rand() % 5;
     }
+
+  sim.syncCellTypes();
 
   const int STEPS = 1e2;
   auto it = tq::trange(STEPS);

@@ -10,6 +10,20 @@ namespace Urban
     Simulation *simulation;
 
     Cell *grid; // We use a multi-slot system
+
+    // SoA approach
+    double *one_min_albedo;
+    int *cell_types;
+
+    // already final form
+    double *k_lateral_left;
+    double *k_lateral_right;
+    double *k_lateral_top;
+    double *k_lateral_bottom;
+
+    double *k_surface;     // already factoring in K_SENSIBLE
+    double *heat_capacity; // per cell, includes dt!
+
     uint slots;
     int rows;
     int cols;
@@ -26,19 +40,18 @@ namespace Urban
     }
 
     // Updates a single cell
-    void update(Cell &left, Cell &top, Cell &bottom, Cell &right, Cell &current, Cell &updated, double S_in)
+    void update(int idx_left, int idx_top, int idx_bottom, int idx_right, int idx_cur, int idx_res, int idx, double S_in)
     {
-      updated.T = 0;
-      updated.T += get_heat_transfer_rate(current.T);
-      updated.T += K_SENSIBLE * simulation->celldata_hot[current.type].k_surface_factor * (T_ATMOSPHERE - current.T);
-      updated.T += S_in * (1 - simulation->celldata_hot[current.type].albedo);
-      updated.T += (left.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[left.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T += (top.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[top.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T += (bottom.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[bottom.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T += (right.T - current.T) * 2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE * (1 / simulation->celldata_hot[right.type].k_lateral + 1 / simulation->celldata_hot[current.type].k_lateral));
-      updated.T *= simulation->dt;
-      updated.T /= simulation->celldata_hot[current.type].heat_capacity * GRID_HEIGHT;
-      updated.T += current.T;
+      double dT = 0;
+      dT += get_heat_transfer_rate(grid[idx_cur].T);
+      dT += k_surface[idx] * (T_ATMOSPHERE - grid[idx_cur].T);
+      dT += S_in * one_min_albedo[idx];
+      dT += k_lateral_left[idx] * (grid[idx_left].T - grid[idx_cur].T);
+      dT += k_lateral_top[idx] * (grid[idx_top].T - grid[idx_cur].T);
+      dT += k_lateral_bottom[idx] * (grid[idx_bottom].T - grid[idx_cur].T);
+      dT += k_lateral_right[idx] * (grid[idx_right].T - grid[idx_cur].T);
+      dT /= heat_capacity[idx];
+      grid[idx_res].T = dT + grid[idx_cur].T;
     }
 
     void step()
@@ -52,12 +65,13 @@ namespace Urban
       {
         for (unsigned int j = 0; j < cols; j++)
         {
-          update(grid[prev_slot * rows * cols + ((i - 1 + rows) % rows) * cols + j],
-                 grid[prev_slot * rows * cols + i * cols + (j - 1 + cols) % cols],
-                 grid[prev_slot * rows * cols + i * cols + (j + 1) % cols],
-                 grid[prev_slot * rows * cols + ((i + 1) % rows) * cols + j],
-                 grid[prev_slot * rows * cols + i * cols + j],
-                 grid[current_slot * rows * cols + i * cols + j],
+          update(prev_slot * rows * cols + i * cols + (j - 1 + cols) % cols,
+                 prev_slot * rows * cols + ((i - 1 + rows) % rows) * cols + j,
+                 prev_slot * rows * cols + ((i + 1) % rows) * cols + j,
+                 prev_slot * rows * cols + i * cols + (j + 1) % cols,
+                 prev_slot * rows * cols + i * cols + j,
+                 current_slot * rows * cols + i * cols + j,
+                 i * cols + j,
                  S_in);
         }
       }
@@ -114,6 +128,27 @@ namespace Urban
       return cols;
     }
 
+    void syncCellTypes()
+    {
+      for (int i = 0; i < (rows * cols); i++)
+      {
+        one_min_albedo[i] = 1 - this->simulation->celldata[cell_types[i]].albedo;
+        k_surface[i] = this->simulation->celldata[cell_types[i]].k_surface_factor * K_SENSIBLE;
+        heat_capacity[i] = this->simulation->celldata[cell_types[i]].heat_capacity * GRID_HEIGHT / simulation->dt;
+      }
+
+      for (int i = 0; i < rows; i++)
+      {
+        for (int j = 0; j < cols; j++)
+        {
+          k_lateral_left[i * cols + j] = (2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE)) / (1 / this->simulation->celldata[cell_types[i * cols + j]].k_lateral + 1 / this->simulation->celldata[cell_types[i * cols + (j - 1 + cols) % cols]].k_lateral);
+          k_lateral_top[i * cols + j] = (2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE)) / (1 / this->simulation->celldata[cell_types[i * cols + j]].k_lateral + 1 / this->simulation->celldata[cell_types[((i - 1 + rows) % rows) * cols + j]].k_lateral);
+          k_lateral_bottom[i * cols + j] = (2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE)) / (1 / this->simulation->celldata[cell_types[i * cols + j]].k_lateral + 1 / this->simulation->celldata[cell_types[((i + 1) % rows) * cols + j]].k_lateral);
+          k_lateral_right[i * cols + j] = (2 * GRID_HEIGHT / (GRID_SIZE * GRID_SIZE)) / (1 / this->simulation->celldata[cell_types[i * cols + j]].k_lateral + 1 / this->simulation->celldata[cell_types[i * cols + (j + 1) % cols]].k_lateral);
+        }
+      }
+    }
+
     Impl(int rows, int cols, double azimuth, double co2_ppm, double ch4_ppm, double dt, double S0, uint slots, Simulation *simulation)
     {
       if (slots <= 1)
@@ -131,12 +166,29 @@ namespace Urban
       this->simulation->azimuth = azimuth;
 
       grid = new Cell[slots * rows * cols];
+      one_min_albedo = new double[rows * cols];
+      k_lateral_left = new double[rows * cols];
+      k_lateral_right = new double[rows * cols];
+      k_lateral_top = new double[rows * cols];
+      k_lateral_bottom = new double[rows * cols];
+      k_surface = new double[rows * cols];
+      heat_capacity = new double[rows * cols];
+      cell_types = new int[rows * cols];
+
       rebuild_heat_transfer_rate_t();
     }
 
     ~Impl()
     {
       delete[] grid;
+      delete[] one_min_albedo;
+      delete[] k_lateral_left;
+      delete[] k_lateral_right;
+      delete[] k_lateral_top;
+      delete[] k_lateral_bottom;
+      delete[] k_surface;
+      delete[] heat_capacity;
+      delete[] cell_types;
     }
   };
 
@@ -163,45 +215,45 @@ namespace Urban
     const double NU = 15000;
 
     // Initialize data
-    celldata_cold[0].name = "Asphalt";
-    celldata_cold[0].color = "oklch(0.372 0.044 257.29)";
+    celldata[0].name = "Asphalt";
+    celldata[0].color = "oklch(0.372 0.044 257.29)";
 
-    celldata_hot[0].albedo = 0.04;
-    celldata_hot[0].k_lateral = 0.75 * NU;
-    celldata_hot[0].heat_capacity = 1200000;
-    celldata_hot[0].k_surface_factor = 1.38;
+    celldata[0].albedo = 0.04;
+    celldata[0].k_lateral = 0.75 * NU;
+    celldata[0].heat_capacity = 1200000;
+    celldata[0].k_surface_factor = 1.38;
 
-    celldata_cold[1].name = "Concrete";
-    celldata_cold[1].color = "oklch(86.9% 0.022 252.894)";
+    celldata[1].name = "Concrete";
+    celldata[1].color = "oklch(86.9% 0.022 252.894)";
 
-    celldata_hot[1].albedo = 0.30;
-    celldata_hot[1].k_lateral = 0.60 * NU;
-    celldata_hot[1].heat_capacity = 1000000;
-    celldata_hot[1].k_surface_factor = 1.25;
+    celldata[1].albedo = 0.30;
+    celldata[1].k_lateral = 0.60 * NU;
+    celldata[1].heat_capacity = 1000000;
+    celldata[1].k_surface_factor = 1.25;
 
-    celldata_cold[2].name = "Grass";
-    celldata_cold[2].color = "#b1d084";
+    celldata[2].name = "Grass";
+    celldata[2].color = "#b1d084";
 
-    celldata_hot[2].albedo = 0.25;
-    celldata_hot[2].k_lateral = 0.30 * NU;
-    celldata_hot[2].heat_capacity = 800000;
-    celldata_hot[2].k_surface_factor = 0.97;
+    celldata[2].albedo = 0.25;
+    celldata[2].k_lateral = 0.30 * NU;
+    celldata[2].heat_capacity = 800000;
+    celldata[2].k_surface_factor = 0.97;
 
-    celldata_cold[3].name = "Forest";
-    celldata_cold[3].color = "#4a6f15";
+    celldata[3].name = "Forest";
+    celldata[3].color = "#4a6f15";
 
-    celldata_hot[3].albedo = 0.15;
-    celldata_hot[3].k_lateral = 0.30 * NU;
-    celldata_hot[3].heat_capacity = 900000;
-    celldata_hot[3].k_surface_factor = 0.83;
+    celldata[3].albedo = 0.15;
+    celldata[3].k_lateral = 0.30 * NU;
+    celldata[3].heat_capacity = 900000;
+    celldata[3].k_surface_factor = 0.83;
 
-    celldata_cold[4].name = "Water";
-    celldata_cold[4].color = "#4a6f15";
+    celldata[4].name = "Water";
+    celldata[4].color = "#8ab3b4";
 
-    celldata_hot[4].albedo = 0.06;
-    celldata_hot[4].k_lateral = 0.60 * NU;
-    celldata_hot[4].heat_capacity = 4000000;
-    celldata_hot[4].k_surface_factor = 1.66;
+    celldata[4].albedo = 0.06;
+    celldata[4].k_lateral = 0.60 * NU;
+    celldata[4].heat_capacity = 4000000;
+    celldata[4].k_surface_factor = 1.66;
   }
 
   int Simulation::getSlots()
@@ -249,5 +301,15 @@ namespace Urban
   double *get_heat_transfer_rate_t_ptr()
   {
     return &heat_transfer_rate_main_t[0][0][0];
+  }
+
+  int *Simulation::getCellTypes()
+  {
+    return this->impl->cell_types;
+  }
+
+  void Simulation::syncCellTypes()
+  {
+    this->impl->syncCellTypes();
   }
 }

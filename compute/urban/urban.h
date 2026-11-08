@@ -12,16 +12,12 @@ namespace Urban
   constexpr double K_SENSIBLE = 14.0792;
   constexpr double T_ATMOSPHERE = 281.7;
 
-  struct CellData_Hot
+  struct CellData
   {
     double albedo;
     double k_lateral;
     double k_surface_factor;
     double heat_capacity;
-  };
-
-  struct CellData_Cold
-  {
     std::string name;
     std::string color;
   };
@@ -29,7 +25,6 @@ namespace Urban
   struct Cell
   {
     double T;
-    int type;
   };
 
   constexpr double HEAT_TRANSFER_RATE_T_START = 100;
@@ -46,8 +41,7 @@ namespace Urban
   public:
     // Cell data
 
-    CellData_Cold celldata_cold[NUM_CELL_TYPES];
-    CellData_Hot celldata_hot[NUM_CELL_TYPES];
+    CellData celldata[NUM_CELL_TYPES];
 
     /*
       Gets the current grid
@@ -56,6 +50,16 @@ namespace Urban
       @note The simulation uses a buffer of a certain length (returned by `getSlots()`). This pointer's data will be overwritten when `step()` is called the `getSlots()`th time after the pointer is returned, **or immediately after `propogateChanges()` is called**. If you need to keep stale data longer, use more slots.
     */
     Cell *getCurrentGrid();
+
+    /*
+      Gets the cell types array
+
+      @returns A pointer to a 2D array with dimension ROWS x COLS containing ints
+    */
+    int *getCellTypes();
+
+    // Syncs cell types with internal data structures
+    void syncCellTypes();
 
     /*
       Propogates changes on the current grid to every other grid.
