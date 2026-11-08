@@ -40,17 +40,25 @@ namespace Urban
       return (heat_transfer_rate_t[idx] + (heat_transfer_rate_t[idx + 1] - heat_transfer_rate_t[idx]) * frac);
     }
 
+    double priestley_taylor_fact_t[HEAT_TRANSFER_RATE_T_STEPS];
+
+    double get_priestley_taylor_fact(double T)
+    {
+      int idx = std::clamp<int>((T - HEAT_TRANSFER_RATE_T_START) / HEAT_TRANSFER_RATE_T_STEP, 0, HEAT_TRANSFER_RATE_T_STEPS - 2);
+      double frac = (T - HEAT_TRANSFER_RATE_T_START) / HEAT_TRANSFER_RATE_T_STEP - idx;
+      return (priestley_taylor_fact_t[idx] + (priestley_taylor_fact_t[idx + 1] - priestley_taylor_fact_t[idx]) * frac);
+    }
+
     // Updates a single cell
     void update(int idx_left, int idx_top, int idx_bottom, int idx_right, int idx_cur, int idx_res, int idx, double S_in)
     {
       double dT = 0;
       dT += get_heat_transfer_rate(grid[idx_cur].T);
       dT += S_in * one_min_albedo[idx];
-      if (cell_params[idx].use_et)
+      if (cell_params[idx].use_et && dT > 0)
       {
         // Priestley-Taylor
-        const double delta = (610.78) * std::exp(17.27 * (grid[idx_cur].T - 273.15) / (grid[idx_cur].T - 35.85)) * (237.3 * 17.27 / ((grid[idx_cur].T - 35.85) * (grid[idx_cur].T - 35.85)));
-        dT -= std::max(0.0, 1.26 * delta * dT / (delta + 66));
+        dT *= get_priestley_taylor_fact(grid[idx_cur].T);
       }
       dT += k_surface[idx] * (T_ATMOSPHERE - grid[idx_cur].T);
       dT += k_lateral_left[idx] * (grid[idx_left].T - grid[idx_cur].T);
@@ -256,6 +264,13 @@ namespace Urban
       heat_capacity = new double[rows * cols];
       cell_types = new cell_type_t[rows * cols];
       cell_params = new CellParam[rows * cols];
+
+      for (int i = 0; i < HEAT_TRANSFER_RATE_T_STEPS; i++)
+      {
+        double T = HEAT_TRANSFER_RATE_T_START + HEAT_TRANSFER_RATE_T_STEP * i;
+        const double delta = (610.78) * exp(17.27 * (T - 273.15) / (T - 35.85)) * (237.3 * 17.27 / ((T - 35.85) * (T - 35.85)));
+        priestley_taylor_fact_t[i] = 1 - std::min(1.0, 1.26 * delta / (delta + 66));
+      }
 
       rebuild_heat_transfer_rate_t();
     }

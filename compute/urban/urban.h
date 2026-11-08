@@ -8,7 +8,7 @@
 namespace Urban
 {
 
-  typedef int cell_type_t;
+  typedef uint8_t cell_type_t;
 
   constexpr int NUM_CELL_TYPES = 10;
   constexpr double K_SENSIBLE = 14.0792;
