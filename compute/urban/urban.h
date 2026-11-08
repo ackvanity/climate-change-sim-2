@@ -8,9 +8,16 @@
 namespace Urban
 {
 
+  typedef int cell_type_t;
+
   constexpr int NUM_CELL_TYPES = 10;
   constexpr double K_SENSIBLE = 14.0792;
   constexpr double T_ATMOSPHERE = 281.7;
+
+  struct CellParam
+  {
+    bool use_et : 1 = false;
+  };
 
   struct CellData
   {
@@ -18,6 +25,7 @@ namespace Urban
     double k_lateral;
     double k_surface_factor;
     double heat_capacity;
+    CellParam param;
     std::string name;
     std::string color;
   };
@@ -54,15 +62,15 @@ namespace Urban
     /*
       Gets the cell types array
 
-      @returns A pointer to a 2D array with dimension ROWS x COLS containing ints
+      @returns A pointer to a 2D array with dimension ROWS x COLS containing uint8_t
     */
-    int *getCellTypes();
+    cell_type_t *getCellTypes();
 
     // Syncs cell types with internal data structures
     void syncCellTypes();
 
     /*
-      Propogates changes on the current grid to every other grid.
+      Propogates changes on the current grid state to every other grid.
 
       @note Will overwrite data on *all* slots, and thus pointers returned by `getCurrentGrid()`
     */
@@ -74,9 +82,12 @@ namespace Urban
 
     // Simulation parameters
 
+    // dt is baked into internal data structures when syncCellTypes() is called
+
+    double dt; // Time-step of simulation in seconds
+
     // These are picked up on every iteration so can be changed freely at any time
 
-    double dt;          // Time-step of simulation in seconds
     double S0;          // Solar constant in W m^-2
     double time_of_day; // Time of day in hours
     double azimuth;     // Azimuth angle -- 0 or PI at a pole, PI/2 at equator

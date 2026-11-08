@@ -34,7 +34,7 @@ int main()
   fast.syncCellTypes();
   slow.syncCellTypes();
 
-  auto bench = ankerl::nanobench::Bench().relative(true).warmup(100).minEpochIterations(110).epochs(1e2);
+  auto bench = ankerl::nanobench::Bench().relative(true).warmup(100).minEpochIterations(110).epochs(5e2);
   bench.compare("Fast, 500x500", [&]()
                 { fast.step(); }, "Slow, 500x500", [&]()
                 { slow.step(); });
