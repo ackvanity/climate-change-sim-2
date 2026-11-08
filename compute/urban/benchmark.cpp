@@ -18,6 +18,6 @@ int main()
 
   sim.syncCellTypes();
 
-  ankerl::nanobench::Bench().warmup(100).minEpochIterations(10).epochs(1e4).run("simulation, 500x500", [&]()
-                                                                                { sim.step(); });
+  ankerl::nanobench::Bench().warmup(100).minEpochIterations(110).epochs(1e2).run("simulation, 500x500", [&]()
+                                                                                 { sim.step(); });
 }

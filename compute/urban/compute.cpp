@@ -61,10 +61,54 @@ namespace Urban
       current_slot %= slots;
 
       double S_in = std::max(sin((simulation->time_of_day - 6) / 12 * M_PI) * simulation->S0 * sin(this->simulation->azimuth), 0.0);
-      for (unsigned int i = 0; i < rows; i++)
+      for (unsigned int i = 1; i < (rows - 1); i++)
       {
-        for (unsigned int j = 0; j < cols; j++)
+        for (unsigned int j = 1; j < (cols - 1); j++)
         {
+          update(prev_slot * rows * cols + i * cols + (j - 1),
+                 prev_slot * rows * cols + (i - 1) * cols + j,
+                 prev_slot * rows * cols + (i + 1) * cols + j,
+                 prev_slot * rows * cols + i * cols + (j + 1),
+                 prev_slot * rows * cols + i * cols + j,
+                 current_slot * rows * cols + i * cols + j,
+                 i * cols + j,
+                 S_in);
+        }
+      }
+
+      {
+        unsigned int i = 0;
+
+        for (unsigned int j = 1; j < (cols - 1); j++)
+        {
+          update(prev_slot * rows * cols + i * cols + (j - 1 + cols) % cols,
+                 prev_slot * rows * cols + (rows - 1) * cols + j,
+                 prev_slot * rows * cols + (1) * cols + j,
+                 prev_slot * rows * cols + i * cols + (j + 1) % cols,
+                 prev_slot * rows * cols + i * cols + j,
+                 current_slot * rows * cols + i * cols + j,
+                 i * cols + j,
+                 S_in);
+        }
+      }
+
+      {
+        unsigned int i = rows - 1;
+
+        for (unsigned int j = 1; j < (cols - 1); j++)
+        {
+          update(prev_slot * rows * cols + i * cols + (j - 1 + cols) % cols,
+                 prev_slot * rows * cols + (rows - 2) * cols + j,
+                 prev_slot * rows * cols + (0) * cols + j,
+                 prev_slot * rows * cols + i * cols + (j + 1) % cols,
+                 prev_slot * rows * cols + i * cols + j,
+                 current_slot * rows * cols + i * cols + j,
+                 i * cols + j,
+                 S_in);
+        }
+      }
+
+      /*
           update(prev_slot * rows * cols + i * cols + (j - 1 + cols) % cols,
                  prev_slot * rows * cols + ((i - 1 + rows) % rows) * cols + j,
                  prev_slot * rows * cols + ((i + 1) % rows) * cols + j,
@@ -73,8 +117,7 @@ namespace Urban
                  current_slot * rows * cols + i * cols + j,
                  i * cols + j,
                  S_in);
-        }
-      }
+      */
 
       simulation->time_of_day += simulation->dt / (60 * 60);
       while (simulation->time_of_day >= 24)

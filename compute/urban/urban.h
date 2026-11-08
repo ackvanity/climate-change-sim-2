@@ -1,4 +1,4 @@
-#ifndef URBAN_H
+#if !defined(URBAN_H) || defined(URBAN_NO_GUARD)
 #define URBAN_H
 
 #include <cstdint>
