@@ -16,3 +16,10 @@
 [submodule "dependencies/nanobench"]
 	path = dependencies/nanobench
 	url = https://github.com/martinus/nanobench
+[submodule "dependencies/SuiteSparse"]
+	path = dependencies/SuiteSparse
+	url = https://github.com/DrTimothyAldenDavis/SuiteSparse
+[submodule "dependencies/pybind11"]
+	path = dependencies/pybind11
+	url = ../../pybind/pybind11
+	branch = stable
