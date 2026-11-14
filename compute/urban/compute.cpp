@@ -339,7 +339,7 @@ namespace Urban
     celldata[1].albedo = 0.30; // concrete 0.25-0.40 new, ~0.2-0.3 weathered
     celldata[1].k_lateral = 0.60 * NU * DAMPING_DEPTH / GRID_HEIGHT;
     celldata[1].heat_capacity = 1800000 * DAMPING_DEPTH / GRID_HEIGHT; // was 2 m: swung only 3 K a day
-    celldata[1].k_surface_factor = 0.75; // smooth pavement, z0 ~ 0.01 m
+    celldata[1].k_surface_factor = 0.75;                               // smooth pavement, z0 ~ 0.01 m
 
     celldata[2].name = "Grass";
     celldata[2].color = "#b1d084";
@@ -347,7 +347,7 @@ namespace Urban
     celldata[2].albedo = 0.23; // grass 0.16-0.26
     celldata[2].k_lateral = 0.30 * NU * DAMPING_DEPTH / GRID_HEIGHT;
     celldata[2].heat_capacity = 800000 * DAMPING_DEPTH / GRID_HEIGHT;
-    celldata[2].k_surface_factor = 1.0;  // short grass, z0 ~ 0.03 m (reference)
+    celldata[2].k_surface_factor = 1.0; // short grass, z0 ~ 0.03 m (reference)
     celldata[2].param.use_et = true;
 
     celldata[3].name = "Forest";
@@ -356,7 +356,7 @@ namespace Urban
     celldata[3].albedo = 0.13; // deciduous 0.15-0.20, coniferous 0.05-0.15
     celldata[3].k_lateral = 0.30 * NU;
     celldata[3].heat_capacity = 900000;
-    celldata[3].k_surface_factor = 2.5;  // rough canopy, z0 ~ 1 m: mixes heat into the air best
+    celldata[3].k_surface_factor = 2.5; // rough canopy, z0 ~ 1 m: mixes heat into the air best
     celldata[3].param.use_et = true;
 
     celldata[4].name = "Water";

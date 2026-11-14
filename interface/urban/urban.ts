@@ -58,8 +58,17 @@ export const GRID = {
 const TABLE_BYTES = 7 * 21 * 60 * 8;
 /** Solar constant in W/m², as the solver expects (the atmosphere is accounted for in the solver). */
 export const SOLAR_CONSTANT = 1361;
-/** Time step of the simulation in seconds. */
-export const TIME_STEP_S = 100;
+/**
+ * Time step of the simulation in seconds. The solver is explicit: mixed maps oscillate at 3600 s and blow up at about
+ * 4300 s; at 1200 s daily highs and lows are within about 0.45 K of a 10 s run (`workpad/urban/dt-sweep/`, `dt-light/`).
+ */
+export const TIME_STEP_S = 1200;
+/**
+ * Small time step for slow playback, in seconds: at 0.25 simulated hours per real second it still gives 15 updates a
+ * second, so the map and clock move smoothly instead of jumping 20 minutes every 4.8 s. More accurate, but 20× more
+ * steps per simulated hour than `TIME_STEP_S`.
+ */
+export const SMOOTH_TIME_STEP_S = 60;
 /**
  * Latitude at which the mean daily sunlight equals the global mean the heat-transfer table was calibrated for
  * (S0/π · cos φ = S0/4 → φ ≈ 38°, mid-latitudes like the US Standard Atmosphere).
@@ -180,7 +189,22 @@ export class Urban {
     return out;
   }
 
-  /** Advances the simulation by `n` steps of `TIME_STEP_S`. */
+  /** Current time step in seconds (`TIME_STEP_S` unless changed with `setTimeStep`). Kept across `reset`. */
+  get timeStepS(): number {
+    return this.dt;
+  }
+
+  /**
+   * Changes the time step. The solver recomputes its per-cell data (heat capacity includes dt), so call this only when
+   * the value really changes, not every frame. Temperatures and the clock carry on unchanged.
+   */
+  setTimeStep(seconds: number): void {
+    if (seconds === this.dt) return;
+    this.dt = seconds;
+    this.m._ur_set_params(this.dt, this.S0, this.colat);
+  }
+
+  /** Advances the simulation by `n` steps of `timeStepS`. */
   step(n = 1): void {
     this.m._ur_step(n);
     this.elapsedHours += (n * this.dt) / 3600;

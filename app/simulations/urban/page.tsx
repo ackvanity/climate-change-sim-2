@@ -26,6 +26,7 @@ import {
   GRID,
   INITIAL_TEMPERATURE_K,
   NUM_MATERIAL_IDS,
+  SMOOTH_TIME_STEP_S,
   TIME_STEP_S,
   type BrushShape,
   type Material,
@@ -48,6 +49,13 @@ const READOUT_MS = 200;
 const DIVERGED_K = 1000;
 const MAX_BRUSH_RADIUS = 40;
 const SPEED = { min: 0.25, max: 48, step: 0.25 }; // simulated hours per real second
+/**
+ * Adaptive time step, with hysteresis because changing it rebuilds the solver's per-cell data: below
+ * `SMOOTH_BELOW` h/s the solver switches to `SMOOTH_TIME_STEP_S`, and only goes back to `TIME_STEP_S` once the speed
+ * reaches `FAST_FROM` h/s. In between, whichever step is active is kept, so dragging the slider does not flip it.
+ */
+const SMOOTH_BELOW = 1;
+const FAST_FROM = 4;
 const KELVIN_AT_0C = 273.15;
 /** Tour demos run on a small grid so a few simulated days pass in seconds. */
 const DEMO_SIZE = 100;
@@ -415,6 +423,10 @@ function UrbanApp({ urban }: { urban: Urban }) {
 
   useEffect(() => urban.setGases(co2, ch4), [urban, co2, ch4]);
   useEffect(() => urban.setLatitude(latitude), [urban, latitude]);
+  useEffect(() => {
+    if (speed < SMOOTH_BELOW) urban.setTimeStep(SMOOTH_TIME_STEP_S);
+    else if (speed >= FAST_FROM) urban.setTimeStep(TIME_STEP_S);
+  }, [urban, speed]);
 
   // The animation loop: step the solver for as much simulated time as the speed asks for, within the frame budget.
   useEffect(() => {
@@ -427,7 +439,7 @@ function UrbanApp({ urban }: { urban: Urban }) {
     let msPerStep = Math.max(perf.current.msPerStep, 3);
     const frame = (now: number) => {
       owed +=
-        ((speedRef.current * 3600) / TIME_STEP_S) *
+        ((speedRef.current * 3600) / urban.timeStepS) *
         Math.min((now - last) / 1000, 0.1);
       last = now;
       const want = Math.floor(owed);

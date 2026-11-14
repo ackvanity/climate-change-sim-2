@@ -36,4 +36,29 @@ Possible approach:
 
 Keep the explicit stability limit in mind: the air layer adds a fast mode if its heat capacity is small.
 
+### Semi-implicit heat losses (larger, more accurate time steps)
+
+`update()` in `compute/urban/compute.cpp` is fully explicit: the heat lost to the air (`k_surface`), the infrared emission
+(table slope) and the lateral conduction are all evaluated at the temperature at the start of the step. This sets both
+the stability limit and most of the time-step error.
+
+- **Stability**: mixed maps oscillate at dt = 3600 s and blow up at 4320–5400 s (a thin grass cell next to water or
+  forest is the weakest case). The page used 100 s and now uses 1200 s (`TIME_STEP_S`), which is safe (`workpad/urban/dt-sweep/`).
+- **Accuracy**: the surface responds a step late and overshoots, so daily swings come out too large (about 0.35 K per
+  extra 1000 s of dt for pavement; 0.45 K at 1200 s).
+- **Sunlight averaging alone does not fix it**: using the exact mean sunlight over [t, t + dt] instead of the value at t
+  cut the error about 3× for forest and water but made grass and mixed maps worse (rms 0.12 → 0.20 K at 1200 s), because
+  the early sunlight was partly cancelling the late response (`workpad/urban/dt-light/`).
+
+Possible approach:
+
+1. Linearize the losses around the current temperature: per cell, `G = k_surface + dIR/dT + sum of the four k_lateral`
+   (the infrared slope comes from the heat-transfer table; for evapotranspiring cells include the Priestley–Taylor factor).
+2. Solve for the new temperature with the cell's own losses taken at the end of the step:
+   `T_new = T + (F(T) * dt) / (C + G * dt)`, i.e. divide by `C/dt + G` instead of `C/dt` (neighbors still enter at their
+   old temperatures, which keeps it a single pass).
+3. Then switch the sunlight to the step average, which should now reduce the error instead of increasing it.
+4. Re-run both workpad sweeps to find the new stable and accurate dt, then raise `TIME_STEP_S` in
+   `interface/urban/urban.ts` (fewer steps per simulated hour, so higher speeds on large grids and phones).
+
 ## grid
