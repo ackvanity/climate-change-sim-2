@@ -8,10 +8,14 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type Ref,
 } from 'react';
 import { Simulation } from '@/components/simulation';
 import { Slider } from '@/components/slider';
 import { Tabs } from '@/components/tabs';
+import { DataExport } from '@/components/data-export';
+import type { ExportColumn } from '@/components/use-export';
+import { TourView, regionOf, useTour } from '@/components/use-tour';
 import {
   VariablePlot,
   type PlotAxes,
@@ -34,8 +38,8 @@ import { useUrban } from './use-urban';
 
 const GRID_SIZES = [100, 250, 500];
 const DEFAULT_SIZE = 500;
-/** Most history samples kept; beyond it every second sample is dropped, so the whole run stays visible. */
-const MAX_SAMPLES = 4000;
+/** The history keeps only this many simulated hours (5 days); older samples are dropped. */
+const HISTORY_HOURS = 120;
 /** Wall-clock time one animation frame may spend stepping the solver; the speed setting is capped by it. */
 const FRAME_BUDGET_MS = 12;
 /** How often the sidebar readout is allowed to re-render. */
@@ -45,8 +49,11 @@ const DIVERGED_K = 1000;
 const MAX_BRUSH_RADIUS = 40;
 const SPEED = { min: 0.25, max: 48, step: 0.25 }; // simulated hours per real second
 const KELVIN_AT_0C = 273.15;
+/** Tour demos run on a small grid so a few simulated days pass in seconds. */
+const DEMO_SIZE = 100;
+const DEMO_SPEED = 24; // simulated hours per real second
 
-// ---- colour maps -----------------------------------------------------------------------------------------------------
+// ---- color maps ------------------------------------------------------------------------------------------------------
 
 const COLOR_PRESETS = {
   thermal: {
@@ -71,7 +78,7 @@ const hexToRgb = (hex: string): [number, number, number] => {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 };
 
-/** 256 RGBA entries (1024 bytes), blending linearly between evenly spaced colour stops. */
+/** 256 RGBA entries (1024 bytes), blending linearly between evenly spaced color stops. */
 function buildLut(stops: readonly string[]): Uint8Array {
   const rgb = stops.map(hexToRgb);
   const lut = new Uint8Array(256 * 4);
@@ -86,14 +93,14 @@ function buildLut(stops: readonly string[]): Uint8Array {
   return lut;
 }
 
-/** Any CSS colour (the solver's materials use hex and oklch) as RGBA bytes, by letting a canvas parse it. */
+/** Any CSS color (the solver's materials use hex and oklch) as RGBA bytes, by letting a canvas parse it. */
 function cssToRgba(css: string): [number, number, number, number] {
   const ctx = document
     .createElement('canvas')
     .getContext('2d', { willReadFrequently: true });
   if (!ctx) return [203, 213, 225, 255];
   ctx.fillStyle = '#cbd5e1';
-  ctx.fillStyle = css; // an unparsable colour leaves the fallback in place
+  ctx.fillStyle = css; // an unparsable color leaves the fallback in place
   ctx.fillRect(0, 0, 1, 1);
   const d = ctx.getImageData(0, 0, 1, 1).data;
   return [d[0], d[1], d[2], 255];
@@ -101,7 +108,7 @@ function cssToRgba(css: string): [number, number, number, number] {
 
 /**
  * Palette for the material map (one RGBA per material id) plus CSS swatches. Materials the solver gives the same
- * colour would be indistinguishable on the map, so later ones are darkened until they differ.
+ * color would be indistinguishable on the map, so later ones are darkened until they differ.
  */
 function materialPalette(materials: Material[]) {
   const rgba = new Uint8Array(NUM_MATERIAL_IDS * 4);
@@ -125,10 +132,12 @@ function materialPalette(materials: Material[]) {
 
 // ---- starting layouts ------------------------------------------------------------------------------------------------
 
-type LayoutKind = 'city' | 'river' | 'concrete';
+type LayoutKind = 'city' | 'river' | 'park' | 'strips' | 'concrete';
 const LAYOUTS: Record<LayoutKind, string> = {
   city: 'City with parks',
   river: 'City with river',
+  park: 'City with one central park',
+  strips: 'One strip of each material',
   concrete: 'All concrete',
 };
 
@@ -152,6 +161,14 @@ function makeLayout(
   const water = idOf('water');
   const out = new Uint8Array(rows * cols).fill(concrete);
   if (kind === 'concrete') return out;
+  if (kind === 'strips') {
+    // Five equal vertical bands, wide enough that their middles barely feel the neighbors.
+    const order = [asphalt, concrete, grass, forest, water];
+    for (let i = 0; i < rows; i++)
+      for (let j = 0; j < cols; j++)
+        out[i * cols + j] = order[Math.min(4, Math.floor((j * 5) / cols))];
+    return out;
+  }
   const period = Math.max(20, Math.round(Math.min(rows, cols) / 8));
   const road = Math.max(2, Math.round(period / 7));
   for (let i = 0; i < rows; i++)
@@ -167,9 +184,18 @@ function makeLayout(
         else if (kind === 'city' && h < 0.26)
           id = d < period * 0.3 ? water : grass;
       }
+      if (kind === 'park') {
+        // Streets and blocks, with one round park in the middle: forest core, grass ring, a pond to one side.
+        const r = Math.hypot(i - rows / 2, j - cols / 2) / Math.min(rows, cols);
+        const pond =
+          Math.hypot(i - rows * 0.45, j - cols * 0.58) / Math.min(rows, cols);
+        if (pond < 0.05) id = water;
+        else if (r < 0.1) id = forest;
+        else if (r < 0.2) id = grass;
+      }
       if (kind === 'river') {
-        const centre = cols * (0.5 + 0.18 * Math.sin((i / rows) * Math.PI * 3));
-        const off = Math.abs(j - centre);
+        const center = cols * (0.5 + 0.18 * Math.sin((i / rows) * Math.PI * 3));
+        const off = Math.abs(j - center);
         if (off < cols * 0.035) id = water;
         else if (off < cols * 0.055) id = grass;
       }
@@ -226,27 +252,25 @@ interface Readout {
 export default function UrbanHeat() {
   const { urban, error } = useUrban();
 
-  return (
+  return urban ? (
+    <UrbanApp urban={urban} />
+  ) : (
     <Simulation>
       <Simulation.Heading title="Urban Heat Island" />
-      {urban ? (
-        <UrbanApp urban={urban} />
-      ) : (
-        <Simulation.Main>
-          <div className="min-w-0 flex-1 p-8">
-            {error ? (
-              <p role="alert" className="max-w-prose">
-                The urban heat solver could not be loaded: {error}. It needs{' '}
-                <code>public/wasm/urban/</code> (run{' '}
-                <code>interface/urban/build.sh</code>) and{' '}
-                <code>public/data/urban/heat_transfer_rate.bin</code>.
-              </p>
-            ) : (
-              <p>Loading the solver…</p>
-            )}
-          </div>
-        </Simulation.Main>
-      )}
+      <Simulation.Main>
+        <div className="min-w-0 flex-1 p-8">
+          {error ? (
+            <p role="alert" className="max-w-prose">
+              The urban heat solver could not be loaded: {error}. It needs{' '}
+              <code>public/wasm/urban/</code> (run{' '}
+              <code>interface/urban/build.sh</code>) and{' '}
+              <code>public/data/urban/heat_transfer_rate.bin</code>.
+            </p>
+          ) : (
+            <p>Loading the solver…</p>
+          )}
+        </div>
+      </Simulation.Main>
       <Simulation.Footer></Simulation.Footer>
     </Simulation>
   );
@@ -320,11 +344,12 @@ function UrbanApp({ urban }: { urban: Urban }) {
     (st: Stats, opts: { force?: boolean; record?: boolean } = {}) => {
       if (opts.record) {
         const h = history.current;
-        h.push(sampleOf(urban, st));
-        if (h.length > MAX_SAMPLES)
-          history.current = h.filter(
-            (_, i) => i % 2 === 0 || i === h.length - 1
-          );
+        const sample = sampleOf(urban, st);
+        h.push(sample);
+        const cutoff = sample.time - HISTORY_HOURS;
+        let drop = 0;
+        while (drop < h.length - 1 && h[drop].time < cutoff) drop++;
+        if (drop > 0) history.current = h.slice(drop);
       }
       const now = performance.now();
       if (!opts.force && now - lastReadout.current < READOUT_MS) return;
@@ -376,9 +401,16 @@ function UrbanApp({ urban }: { urban: Urban }) {
     [urban, size, idOf, afterAdvance]
   );
 
+  /** Scene (and whether to play) for the next restart caused by a grid-size change; tour slides set it. */
+  const pendingRestart = useRef<{ kind: LayoutKind; play: boolean }>({
+    kind: 'city',
+    play: false,
+  });
   useEffect(() => {
-    setPlaying(false);
-    restart('city');
+    const p = pendingRestart.current;
+    pendingRestart.current = { kind: 'city', play: false };
+    restart(p.kind);
+    setPlaying(p.play);
   }, [restart]);
 
   useEffect(() => urban.setGases(co2, ch4), [urban, co2, ch4]);
@@ -478,6 +510,17 @@ function UrbanApp({ urban }: { urban: Urban }) {
     return v;
   }, [urban.materials, unit]);
 
+  // Every recorded property, in the unit chosen for display.
+  const exportColumns = useMemo<ExportColumn<Sample>[]>(
+    () =>
+      Object.keys(variables).map((k) => ({
+        label: variables[k].label,
+        unit: variables[k].unit,
+        value: (s: Sample) => (isTemperatureKey(k) ? show(s[k]) : s[k]),
+      })),
+    [variables, show]
+  );
+
   const points = useMemo(
     () =>
       samples.map((s) => {
@@ -488,345 +531,617 @@ function UrbanApp({ urban }: { urban: Urban }) {
     [samples, show]
   );
 
+  // Elements the tour highlights.
+  const brushRef = useRef<HTMLElement>(null);
+  const simRef = useRef<HTMLElement>(null);
+  const atmoRef = useRef<HTMLElement>(null);
+  const heatRef = useRef<HTMLElement>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
+
+  /** History key of a material's statistic, e.g. `avgOf('asphalt')` → `m0_avg`. */
+  const avgOf = (name: string) => `m${idOf(name)}_avg`;
+  /** Fresh demo scene at the demo size, playing. A size change restarts through `pendingRestart`. */
+  const loadDemo = (kind: LayoutKind) => {
+    setSpeed(DEMO_SPEED);
+    if (size !== DEMO_SIZE) {
+      pendingRestart.current = { kind, play: true };
+      setSize(DEMO_SIZE);
+    } else {
+      restart(kind);
+      setPlaying(true);
+    }
+  };
+  /** History tab plotting two materials' averages against time; keeps the current run going. */
+  const compare = (y: string, y2: string) => {
+    setTab('history');
+    setAxes({ x: 'time', y: avgOf(y), y2: avgOf(y2) });
+    if (!diverged.current) setPlaying(true);
+  };
+
+  const tour = useTour([
+    {
+      title: `Urban Heat Island`,
+      content: `City landscapes are usually warmer than their surroundings, a phenomenon known as
+      the urban heat island effect. This is because different materials react differently to
+      incoming radiation. Concrete and asphalt tend to retain it more, while plants and water bodies
+      let moisture evaporate and dissipate heat more efficiently, meaning they are cooler during the
+      day.
+
+      This simulation demonstrates how different city landscapes can cause or mitigate this
+      phenomenon.`,
+    },
+    {
+      title: `Painting the Map`,
+      content: `The grid editor shows the city layout. Pick a **material** in the Brush panel, set
+      its size and shape, then click and drag over the grid to paint.
+
+      "Fill all" covers the whole map with the chosen material. You can use pre-made scenarios in
+      the Scene menu.`,
+      effect: () => setTab('editor'),
+      region: () => regionOf(brushRef.current),
+    },
+    {
+      title: `Running the Simulation`,
+      content: `Press **Play** to advance the simulation. You can adjust the speed of the simulation
+      and the latitude (which affects how strong the sun's radiation is at that point). Restart
+      resets the entire simulation and restores the default city layout.`,
+      region: () => regionOf(simRef.current),
+    },
+    {
+      title: `Atmosphere`,
+      content: `Greenhouse gases affect how hot the atmosphere, and surface, will be. Drag the CO₂
+      and CH₄ sliders and see how the temperatures drift.
+
+      **NOTE**: For a dedicated exploration on how these gases affect atmospheric temperatures,
+      refer to the Greenhouse Effect simulation instead.`,
+      region: () => regionOf(atmoRef.current),
+    },
+    {
+      title: `Temperature Map`,
+      content: `This tab shows a heatmap of the city by temperature. Hover over the map to read the
+      value and material under the pointer. Hotter surfaces show warmer colors by default.`,
+      effect: () => setTab('heatmap'),
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Color Settings`,
+      content: `Configure heatmap and temperature display options here.`,
+      effect: () => setTab('heatmap'),
+      region: () => regionOf(heatRef.current),
+    },
+    {
+      title: `History`,
+      content: `The history plot collects trends of temperature as a function of time. You can use
+      it to compare how different materials behave.`,
+      effect: () => setTab('history'),
+      region: () => regionOf(viewRef.current),
+    },
+
+    // 1. Explain why concrete and asphalt swing so much (switch to chart and show the effect)
+    // Real-world figures below are commonly cited values; check sources before publishing.
+    {
+      title: `Surface Heating: Asphalt`,
+      content: `To see how materials respond to sunlight, we've loaded a map with one strip of each
+      material and plotted the average temperature of asphalt and grass over time. Tick "Use a
+      single scale for both Y axes" to compare them on the same scale, and wait for the simulation
+      to stabilize before
+
+      Each cell gains heat from sunlight and the atmosphere, and loses heat by emitting infrared
+      radiation, by contact with the air and by evaporating water:
+
+      $$C\\,\\frac{dT}{dt} = (1-\\alpha)\\,S + L_{\\downarrow} - \\varepsilon\\sigma T^4 - H - \\lambda E$$
+
+      Here $\\alpha$ is the **albedo**, the fraction of sunlight reflected, and $C$ is the heat
+      capacity of the surface. Asphalt has a low albedo of around 0.1, so it absorbs about 90% of
+      incoming sunlight. It is also dry, so $\\lambda E = 0$ and all of the absorbed energy goes
+      into heating the surface. Furthermore, only the top ~10 cm of pavement heats up and cools down
+      within a day, so $C$ is small and the temperature responds quickly to sunlight.`,
+      effect: () => {
+        loadDemo('strips');
+        compare('asphalt', 'grass');
+      },
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Surface Heating: Day and Night`,
+      content: `The chart now plots asphalt and concrete. Both heat up rapidly after sunrise and
+      cool down after sunset, with a daily swing of tens of degrees, much larger than grass or
+      water.
+
+      Concrete has a higher albedo (around 0.3), so it absorbs less sunlight and stays cooler during
+      the day. This is the principle behind **cool pavements** and **cool roofs**, which use lighter
+      surfaces to reflect more sunlight. For example, Los Angeles has tested reflective coatings on
+      its streets, reportedly lowering surface temperatures by several degrees. In contrast, sunlit
+      asphalt can reach 60–70 °C on summer afternoons, hot enough to cause burns on contact in
+      cities such as Phoenix.
+
+      In real cities, the heat island is usually strongest at *night*. Buildings store heat in their
+      walls, and narrow streets block the view of the cold sky, so the city releases its heat slowly
+      after dark. Hot nights prevent people from recovering from the heat of the day, which
+      contributed to the deaths in the 1995 Chicago and 2003 European heatwaves.
+
+      **NOTE**: This simulation does not include buildings, so it mainly shows the daytime heating
+      of surfaces.`,
+      effect: () => compare('asphalt', 'concrete'),
+      region: () => regionOf(viewRef.current),
+    },
+
+    // 2. Explain how evapotranspiration works (show difference of forest, water, and grass in multiple slides).
+    {
+      title: `Evapotranspiration`,
+      content: `Plants and wet surfaces have an additional way to lose heat: evaporating water.
+      Evaporation from soil and open water, together with transpiration (water released by plants
+      through their leaves), is known as **evapotranspiration**.
+
+      Evaporating water requires a large amount of energy, namely the latent heat of vaporization,
+      about 2.45 MJ per kg of water. This means that evaporating just 1 mm of water per day removes
+      about 28 W/m² on average, and a well-watered field can evaporate 4–6 mm on a summer day,
+      removing over 100 W/m².
+
+      The simulation uses the **Priestley–Taylor** model, in which a fraction of the energy
+      available at the surface ($R_n - G$) goes into evaporation instead of heating:
+
+      $$\\lambda E = \\alpha_{PT}\\,\\frac{\\Delta}{\\Delta+\\gamma}\\,(R_n - G)$$
+
+      Here $\\Delta$ is the rate at which the saturation vapor pressure increases with temperature,
+      $\\gamma$ is the psychrometric constant and $\\alpha_{PT} \\approx 1.26$. Since $\\Delta$
+      grows with temperature, hotter surfaces put a larger fraction of their energy into
+      evaporation, which limits how hot they can get.`,
+      effect: () => compare('grass', 'concrete'),
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Evapotranspiration: Grass`,
+      content: `The chart now plots grass and concrete. Grass absorbs roughly as much sunlight as
+      concrete (albedo around 0.23), so why does it stay much cooler during the day? This occurs
+      because a large part of the absorbed energy evaporates water instead of heating the ground.
+
+      However, this only works while water is available. The simulation assumes that the soil is
+      always moist, but during a drought, grass dries out and stops transpiring, so it heats up
+      almost like bare ground. This is why irrigation and soil moisture matter as much as the plants
+      themselves.`,
+      effect: () => compare('grass', 'concrete'),
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Evapotranspiration: Forest`,
+      content: `The chart now plots forest and grass. Trees have a lower albedo than grass (around
+      0.13), but they still stay cooler. A large tree can transpire hundreds of liters of water per
+      day using its deep roots, so it can keep evaporating long after grass has dried out. Trees
+      also shade the ground and the people below them, although this is not included in the
+      simulation.
+
+      Many cities plant trees for this reason. For example, Medellín's "Green Corridors" turned
+      roads and waterways into planted corridors, reportedly lowering temperatures by about 2 °C,
+      and Melbourne aims to cover 40% of the city with tree canopy by 2040.`,
+      effect: () => compare('forest', 'grass'),
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Evapotranspiration: Water`,
+      content: `The chart now plots water and asphalt. Water has the lowest albedo in the simulation
+      (around 0.08), yet its temperature barely changes throughout the day. This occurs because
+      water has a very high heat capacity (about 4.2 MJ per m³ per kelvin), mixing spreads the heat
+      through a deep layer, and its surface is always wet, so it can always evaporate.
+
+      The same heat capacity works in reverse at night: water releases its stored heat slowly, so
+      counterintuitively, ponds and rivers can be *warmer* than the surrounding land after dark.
+
+      For example, Seoul removed an elevated highway in 2005 to restore the Cheonggyecheon stream
+      beneath it, and the air along the stream was reported to be 3–6 °C cooler than along a nearby
+      road.`,
+      effect: () => compare('water', 'asphalt'),
+      region: () => regionOf(viewRef.current),
+    },
+
+    // 3. Show coolness "bleeding" (lateral conduction), again highlight heatmaps and use appropriate presets
+    {
+      title: `Lateral Conduction`,
+      content: `To see how materials affect their neighbors, we've loaded a city with one park in
+      the middle (forest, a ring of grass and a pond) and switched to the temperature map. Wait
+      until the afternoon, then hover over the concrete right next to the park and compare it to
+      concrete further away.
+
+      Heat flows from hot regions to cold regions through the ground, at a rate proportional to the
+      temperature difference (Fourier's law, $q = -k\\,\\nabla T$). The hot pavement around the park
+      therefore passes some of its heat into the cooler park, so the edge of the park becomes warmer
+      than its center, while the pavement next to it becomes slightly cooler than the rest of the
+      city.
+
+      **NOTE**: In this simulation, heat only moves through the ground, so this effect only reaches
+      one or two cells (10–20 m). In real cities, wind also carries cool air from parks into the
+      surrounding streets, often over a distance similar to the width of the park.`,
+      effect: () => {
+        loadDemo('park');
+        setTab('heatmap');
+      },
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Lateral Conduction: Park Size`,
+      content: `Try painting the same amount of forest as one large block in one area and as many
+      small patches in another (pause the simulation and use the Grid editor), then compare them on
+      the temperature map.
+
+      A large park has a cool center that the warm streets around it cannot reach. Small parks
+      consist mostly of edges, so the surrounding pavement warms them up, but together they cool a
+      much larger number of streets. Because of this, cities use both: large parks as places to
+      escape the heat, and street trees, green roofs and green schoolyards spread throughout every
+      neighborhood. For example, Paris is converting its asphalt schoolyards into "OASIS"
+      schoolyards with plants and permeable ground.`,
+      effect: () => setTab('heatmap'),
+      region: () => regionOf(viewRef.current),
+    },
+    {
+      title: `Real-World Impact`,
+      content: `Cities are typically 1–3 °C warmer than the surrounding countryside on average, and
+      up to about 10 °C warmer on calm, clear evenings.
+
+      This has a significant impact on health, since heat is one of the deadliest types of weather,
+      especially for older people, outdoor workers and people without air conditioning. The heat is
+      also distributed unevenly: in many US cities, historically redlined neighborhoods have fewer
+      trees and more pavement, and are several degrees hotter than other neighborhoods today. Hotter
+      cities also need more air conditioning, whose waste heat and power plant emissions make the
+      problem worse, and heat speeds up the formation of ground-level ozone, reducing air quality.
+
+      The solutions are the same ones you can paint in this simulation, namely using lighter
+      surfaces, adding more trees and grass, and introducing open bodies of water.`,
+    },
+  ]);
+
+  useEffect(() => {
+    tour.start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <Simulation.Main>
-      <Simulation.Sidebar>
-        <SideSection title="Atmosphere">
-          <Slider
-            label="CO₂"
-            value={co2}
-            min={GRID.co2Ppm.min}
-            max={GRID.co2Ppm.max}
-            step={5}
-            unit="ppm"
-            onChange={setCo2}
-          />
-          <Slider
-            label="CH₄"
-            value={ch4}
-            min={GRID.ch4Ppm.min}
-            max={GRID.ch4Ppm.max}
-            step={0.1}
-            unit="ppm"
-            decimals={1}
-            onChange={setCh4}
-          />
-        </SideSection>
-
-        <SideSection title="Simulation">
-          <div className="mb-4 flex flex-wrap gap-4">
-            <ToolButton
-              onClick={() => {
-                if (diverged.current) return;
-                setPlaying((p) => !p);
-              }}
-              disabled={!!readout.diverged}
+    <Simulation>
+      <Simulation.Heading title="Urban Heat Island" tour={tour} />
+      <Simulation.Main>
+        <Simulation.Sidebar>
+          <SideSection ref={brushRef} title="Brush">
+            <div
+              role="radiogroup"
+              aria-label="Material"
+              className="mb-4 grid gap-2"
             >
-              {playing ? 'Pause' : 'Play'}
-            </ToolButton>
-            <ToolButton
-              onClick={stepOnce}
-              disabled={playing || !!readout.diverged}
-            >
-              Step 10 min
-            </ToolButton>
-            <ToolButton onClick={() => (setPlaying(false), restart('city'))}>
-              Restart
-            </ToolButton>
-          </div>
-          <Slider
-            label="Speed"
-            value={speed}
-            min={SPEED.min}
-            max={SPEED.max}
-            step={SPEED.step}
-            unit="h / s"
-            decimals={2}
-            onChange={setSpeed}
-          />
-          <Slider
-            label="Latitude"
-            value={latitude}
-            min={0}
-            max={90}
-            step={1}
-            unit="°"
-            onChange={setLatitude}
-          />
-          <Labelled label="Grid size">
-            <select
-              value={size}
-              onChange={(e) => setSize(Number(e.target.value))}
-              className="border-primary-300 w-full rounded border bg-white px-2 py-1"
-            >
-              {GRID_SIZES.map((n) => (
-                <option key={n} value={n}>
-                  {n} × {n} cells ({n * 10} m × {n * 10} m)
-                </option>
+              {urban.materials.map((m) => (
+                <button
+                  key={m.id}
+                  role="radio"
+                  aria-checked={brushMaterial === m.id}
+                  onClick={() => setBrushMaterial(m.id)}
+                  className={`flex cursor-pointer items-center gap-3 p-2 px-3 text-left ${
+                    brushMaterial === m.id
+                      ? 'bg-primary-600 text-white'
+                      : 'bg-primary-200 hover:bg-primary-300'
+                  }`}
+                >
+                  <span
+                    className="inline-block h-5 w-5 shrink-0 border border-slate-600"
+                    style={{ background: swatch[m.id] }}
+                  />
+                  {m.name}
+                </button>
               ))}
-            </select>
-          </Labelled>
-          <p className="mt-4 tabular-nums">
-            Day {Math.floor(readout.elapsedHours / 24) + 1},{' '}
-            {clock(readout.hourOfDay)} · mean{' '}
-            {Number.isFinite(readout.meanK)
-              ? show(readout.meanK).toFixed(2)
-              : '–'}{' '}
-            {unit}
-          </p>
-          <p className="text-sm tabular-nums">
-            {playing
-              ? `${readout.stepsPerSecond.toFixed(0)} steps/s · ${readout.msPerStep.toFixed(2)} ms/step`
-              : 'Paused'}
-          </p>
-        </SideSection>
-
-        <SideSection title="Brush">
-          <div
-            role="radiogroup"
-            aria-label="Material"
-            className="mb-4 grid gap-2"
-          >
-            {urban.materials.map((m) => (
-              <button
-                key={m.id}
-                role="radio"
-                aria-checked={brushMaterial === m.id}
-                onClick={() => setBrushMaterial(m.id)}
-                className={`flex cursor-pointer items-center gap-3 p-2 px-3 text-left ${
-                  brushMaterial === m.id
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-primary-200 hover:bg-primary-300'
-                }`}
+            </div>
+            <Slider
+              label="Radius"
+              value={radius}
+              min={0}
+              max={MAX_BRUSH_RADIUS}
+              step={1}
+              unit="cells"
+              onChange={setRadius}
+            />
+            <div className="mb-4 flex gap-4">
+              {(['round', 'square'] as const).map((s) => (
+                <label key={s} className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="brush-shape"
+                    checked={shape === s}
+                    onChange={() => setShape(s)}
+                    className="accent-primary-600"
+                  />
+                  {s === 'round' ? 'Round' : 'Square'}
+                </label>
+              ))}
+            </div>
+            <div className="mb-4 flex flex-wrap gap-4">
+              <ToolButton
+                onClick={() => {
+                  urban.fillMaterial(brushMaterial);
+                  notify();
+                  afterEdit();
+                }}
               >
-                <span
-                  className="inline-block h-5 w-5 shrink-0 border border-slate-600"
-                  style={{ background: swatch[m.id] }}
-                />
-                {m.name}
-              </button>
-            ))}
-          </div>
-          <Slider
-            label="Radius"
-            value={radius}
-            min={0}
-            max={MAX_BRUSH_RADIUS}
-            step={1}
-            unit="cells"
-            onChange={setRadius}
-          />
-          <div className="mb-4 flex gap-4">
-            {(['round', 'square'] as const).map((s) => (
-              <label key={s} className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="brush-shape"
-                  checked={shape === s}
-                  onChange={() => setShape(s)}
-                  className="accent-primary-600"
-                />
-                {s === 'round' ? 'Round' : 'Square'}
-              </label>
-            ))}
-          </div>
-          <div className="mb-4 flex flex-wrap gap-4">
-            <ToolButton
-              onClick={() => {
-                urban.fillMaterial(brushMaterial);
-                notify();
-                afterEdit();
-              }}
-            >
-              Fill all
-            </ToolButton>
-            <ToolButton
-              onClick={() => {
-                urban.fillTemperature(INITIAL_TEMPERATURE_K);
-                diverged.current = null;
-                afterAdvance({ force: true });
-              }}
-            >
-              Reset temperatures
-            </ToolButton>
-          </div>
-          <Labelled label="Scene">
-            <select
-              value=""
-              onChange={(e) => {
-                const kind = e.target.value as LayoutKind;
-                if (!kind) return;
-                urban.loadTypes(makeLayout(kind, urban.rows, urban.cols, idOf));
-                notify();
-                afterEdit();
-              }}
-              className="border-primary-300 w-full rounded border bg-white px-2 py-1"
-            >
-              <option value="">Replace the map with…</option>
-              {(Object.keys(LAYOUTS) as LayoutKind[]).map((k) => (
-                <option key={k} value={k}>
-                  {LAYOUTS[k]}
-                </option>
-              ))}
-            </select>
-          </Labelled>
-        </SideSection>
-
-        <SideSection title="Heatmap colours">
-          <Labelled label="Colour map">
-            <select
-              value={preset}
-              onChange={(e) => setPreset(e.target.value as PresetKey)}
-              className="border-primary-300 w-full rounded border bg-white px-2 py-1"
-            >
-              {(
-                Object.keys(COLOR_PRESETS) as (keyof typeof COLOR_PRESETS)[]
-              ).map((k) => (
-                <option key={k} value={k}>
-                  {COLOR_PRESETS[k].label}
-                </option>
-              ))}
-              <option value="custom">Custom</option>
-            </select>
-          </Labelled>
-          <div className="mt-4 mb-4">
-            <div className="mb-1 font-medium">Custom colours (cold → hot)</div>
-            <div className="flex gap-4">
-              {custom.map((c, i) => (
-                <input
-                  key={i}
-                  type="color"
-                  aria-label={['Cold', 'Middle', 'Hot'][i]}
-                  value={c}
-                  onChange={(e) => {
-                    setCustom(
-                      custom.map((o, j) => (j === i ? e.target.value : o))
-                    );
-                    setPreset('custom');
-                  }}
-                  className="border-primary-300 h-9 w-14 cursor-pointer border bg-white"
-                />
-              ))}
+                Fill all
+              </ToolButton>
+              <ToolButton
+                onClick={() => {
+                  urban.fillTemperature(INITIAL_TEMPERATURE_K);
+                  diverged.current = null;
+                  afterAdvance({ force: true });
+                }}
+              >
+                Reset temperatures
+              </ToolButton>
             </div>
-          </div>
-          <label className="mb-2 flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={autoRange}
-              onChange={(e) => setAutoRange(e.target.checked)}
-              className="accent-primary-600"
+            <Labeled label="Scene">
+              <select
+                value=""
+                onChange={(e) => {
+                  const kind = e.target.value as LayoutKind;
+                  if (!kind) return;
+                  urban.loadTypes(
+                    makeLayout(kind, urban.rows, urban.cols, idOf)
+                  );
+                  notify();
+                  afterEdit();
+                }}
+                className="border-primary-300 w-full rounded border bg-white px-2 py-1"
+              >
+                <option value="">Replace the map with…</option>
+                {(Object.keys(LAYOUTS) as LayoutKind[]).map((k) => (
+                  <option key={k} value={k}>
+                    {LAYOUTS[k]}
+                  </option>
+                ))}
+              </select>
+            </Labeled>
+          </SideSection>
+
+          <SideSection ref={simRef} title="Simulation">
+            <div className="mb-4 flex flex-wrap gap-4">
+              <ToolButton
+                onClick={() => {
+                  if (diverged.current) return;
+                  setPlaying((p) => !p);
+                }}
+                disabled={!!readout.diverged}
+              >
+                {playing ? 'Pause' : 'Play'}
+              </ToolButton>
+              <ToolButton onClick={() => (setPlaying(false), restart('city'))}>
+                Restart
+              </ToolButton>
+            </div>
+            <Slider
+              label="Speed"
+              value={speed}
+              min={SPEED.min}
+              max={SPEED.max}
+              step={SPEED.step}
+              unit="h / s"
+              decimals={2}
+              onChange={setSpeed}
             />
-            Range follows the current min / max
-          </label>
-          {!autoRange && (
-            <div className="mb-4 flex items-center gap-2">
-              {[0, 1].map((i) => (
-                <input
-                  key={i}
-                  type="number"
-                  aria-label={i === 0 ? `Lowest ${unit}` : `Highest ${unit}`}
-                  value={Number(show(fixedRange[i]).toFixed(1))}
-                  step={1}
-                  onChange={(e) => {
-                    const k = celsius
-                      ? Number(e.target.value) + KELVIN_AT_0C
-                      : Number(e.target.value);
-                    if (Number.isFinite(k))
-                      setFixedRange(
-                        i === 0 ? [k, fixedRange[1]] : [fixedRange[0], k]
+            <Slider
+              label="Latitude"
+              value={latitude}
+              min={0}
+              max={90}
+              step={1}
+              unit="°"
+              onChange={setLatitude}
+            />
+            <Labeled label="Grid size">
+              <select
+                value={size}
+                onChange={(e) => setSize(Number(e.target.value))}
+                className="border-primary-300 w-full rounded border bg-white px-2 py-1"
+              >
+                {GRID_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n} × {n} cells ({n * 10} m × {n * 10} m)
+                  </option>
+                ))}
+              </select>
+            </Labeled>
+            <p className="mt-4 tabular-nums opacity-50">
+              Day {Math.floor(readout.elapsedHours / 24) + 1},{' '}
+              {clock(readout.hourOfDay)}. Mean temperature{' '}
+              {Number.isFinite(readout.meanK)
+                ? show(readout.meanK).toFixed(2)
+                : '–'}{' '}
+              {unit}
+            </p>
+            <p className="tabular-nums opacity-50">
+              {playing
+                ? `${readout.stepsPerSecond.toFixed(0)} steps/s · ${readout.msPerStep.toFixed(2)} ms/step`
+                : 'Paused'}
+            </p>
+          </SideSection>
+
+          <SideSection ref={atmoRef} title="Atmosphere">
+            <Slider
+              label="CO₂"
+              value={co2}
+              min={GRID.co2Ppm.min}
+              max={GRID.co2Ppm.max}
+              step={5}
+              unit="ppm"
+              onChange={setCo2}
+            />
+            <Slider
+              label="CH₄"
+              value={ch4}
+              min={GRID.ch4Ppm.min}
+              max={GRID.ch4Ppm.max}
+              step={0.1}
+              unit="ppm"
+              decimals={1}
+              onChange={setCh4}
+            />
+          </SideSection>
+
+          <SideSection ref={heatRef} title="Heatmap">
+            <Labeled label="Color map">
+              <select
+                value={preset}
+                onChange={(e) => setPreset(e.target.value as PresetKey)}
+                className="border-primary-300 w-full rounded border bg-white px-2 py-1"
+              >
+                {(
+                  Object.keys(COLOR_PRESETS) as (keyof typeof COLOR_PRESETS)[]
+                ).map((k) => (
+                  <option key={k} value={k}>
+                    {COLOR_PRESETS[k].label}
+                  </option>
+                ))}
+                <option value="custom">Custom</option>
+              </select>
+            </Labeled>
+            <div className="mt-4 mb-4">
+              <div className="mb-1 font-medium">Custom colors (cold → hot)</div>
+              <div className="flex gap-4">
+                {custom.map((c, i) => (
+                  <input
+                    key={i}
+                    type="color"
+                    aria-label={['Cold', 'Middle', 'Hot'][i]}
+                    value={c}
+                    onChange={(e) => {
+                      setCustom(
+                        custom.map((o, j) => (j === i ? e.target.value : o))
                       );
-                  }}
-                  className="border-primary-300 w-24 rounded border bg-white px-2 py-1"
-                />
-              ))}
-              <span>{unit}</span>
+                      setPreset('custom');
+                    }}
+                    className="border-primary-300 h-9 w-14 cursor-pointer border bg-white"
+                  />
+                ))}
+              </div>
             </div>
-          )}
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={celsius}
-              onChange={(e) => setCelsius(e.target.checked)}
-              className="accent-primary-600"
-            />
-            Show temperatures in °C
-          </label>
-        </SideSection>
-      </Simulation.Sidebar>
+            <label className="mb-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={autoRange}
+                onChange={(e) => setAutoRange(e.target.checked)}
+                className="accent-primary-600"
+              />
+              Automatic temperature scale
+            </label>
+            {!autoRange && (
+              <div className="mb-4 flex items-center gap-2">
+                Temperature range
+                {[0, 1].map((i) => (
+                  <input
+                    key={i}
+                    type="number"
+                    aria-label={i === 0 ? `Lowest ${unit}` : `Highest ${unit}`}
+                    value={Number(show(fixedRange[i]).toFixed(1))}
+                    step={1}
+                    onChange={(e) => {
+                      const k = celsius
+                        ? Number(e.target.value) + KELVIN_AT_0C
+                        : Number(e.target.value);
+                      if (Number.isFinite(k))
+                        setFixedRange(
+                          i === 0 ? [k, fixedRange[1]] : [fixedRange[0], k]
+                        );
+                    }}
+                    className="border-primary-300 w-24 rounded border bg-white px-2 py-1"
+                  />
+                ))}
+                <span>{unit}</span>
+              </div>
+            )}
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={celsius}
+                onChange={(e) => setCelsius(e.target.checked)}
+                className="accent-primary-600"
+              />
+              Show temperatures in °C
+            </label>
+          </SideSection>
+          <DataExport
+            filename="urban-history"
+            sheetName="History"
+            description={`The whole recorded history (last ${HISTORY_HOURS} simulated hours): time, and the average, minimum and maximum temperature of the grid and of each material, in ${unit}.`}
+            columns={exportColumns}
+            rows={() => history.current}
+          />
+        </Simulation.Sidebar>
 
-      <div className="min-w-0 flex-1 p-8">
-        {readout.diverged && (
-          <p role="alert" className="mb-4 bg-red-100 p-4 text-red-900">
-            The simulation was stopped: {readout.diverged} Press Restart to
-            begin again.
-          </p>
-        )}
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            {
-              id: 'editor',
-              label: 'Grid editor',
-              content: (
-                <GridEditor
-                  urban={urban}
-                  size={size}
-                  bus={bus.current}
-                  palette={palette}
-                  brush={{ material: brushMaterial, radius, shape }}
-                  onEdit={afterEdit}
-                  legend={urban.materials.map((m) => ({
-                    name: m.name,
-                    color: swatch[m.id],
-                  }))}
-                />
-              ),
-            },
-            {
-              id: 'heatmap',
-              label: 'Temperature map',
-              content: (
-                <Heatmap
-                  urban={urban}
-                  size={size}
-                  bus={bus.current}
-                  lut={lut}
-                  stops={stops}
-                  fixedRange={autoRange ? null : fixedRange}
-                  show={show}
-                  unit={unit}
-                  materials={urban.materials}
-                />
-              ),
-            },
-            {
-              id: 'history',
-              label: 'History',
-              content: (
-                <VariablePlot
-                  mode="line"
-                  variables={variables}
-                  points={points}
-                  defaultX="time"
-                  defaultY="all_avg"
-                  axes={axes}
-                  onAxesChange={setAxes}
-                  onClear={() => {
-                    history.current = [];
-                    afterAdvance({ force: true });
-                  }}
-                  clearLabel="Clear history"
-                  caption={(n) =>
-                    `${n} recorded ${n === 1 ? 'moment' : 'moments'}, one per animation frame while the simulation runs (at most ${MAX_SAMPLES}; when full, every second moment is dropped). The current state is the red point. Pick any variable for each axis.`
-                  }
-                />
-              ),
-            },
-          ]}
-        />
-      </div>
-    </Simulation.Main>
+        <div ref={viewRef} className="min-w-0 flex-1 p-8">
+          {readout.diverged && (
+            <p role="alert" className="mb-4 bg-red-100 p-4 text-red-900">
+              The simulation was stopped: {readout.diverged} Press Restart to
+              begin again.
+            </p>
+          )}
+          <Tabs
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              {
+                id: 'editor',
+                label: 'Grid editor',
+                content: (
+                  <GridEditor
+                    urban={urban}
+                    size={size}
+                    bus={bus.current}
+                    palette={palette}
+                    brush={{ material: brushMaterial, radius, shape }}
+                    onEdit={afterEdit}
+                    legend={urban.materials.map((m) => ({
+                      name: m.name,
+                      color: swatch[m.id],
+                    }))}
+                  />
+                ),
+              },
+              {
+                id: 'heatmap',
+                label: 'Temperature map',
+                content: (
+                  <Heatmap
+                    urban={urban}
+                    size={size}
+                    bus={bus.current}
+                    lut={lut}
+                    stops={stops}
+                    fixedRange={autoRange ? null : fixedRange}
+                    show={show}
+                    unit={unit}
+                    materials={urban.materials}
+                  />
+                ),
+              },
+              {
+                id: 'history',
+                label: 'History',
+                content: (
+                  <VariablePlot
+                    mode="line"
+                    variables={variables}
+                    points={points}
+                    defaultX="time"
+                    defaultY="all_avg"
+                    axes={axes}
+                    onAxesChange={setAxes}
+                    onClear={() => {
+                      history.current = [];
+                      afterAdvance({ force: true });
+                    }}
+                    clearLabel="Clear history"
+                    caption={(n) =>
+                      `${n} recorded data point${n === 1 ? '' : 's'}. Only the last ${HISTORY_HOURS} simulated hours (${HISTORY_HOURS / 24} days) are retained.`
+                    }
+                  />
+                ),
+              },
+            ]}
+          />
+        </div>
+      </Simulation.Main>
+      <Simulation.Footer></Simulation.Footer>
+      <TourView tour={tour} />
+    </Simulation>
   );
 }
 
@@ -1111,21 +1426,21 @@ function Heatmap({
 function SideSection({
   title,
   children,
+  ref,
 }: {
   title: string;
   children: ReactNode;
+  ref?: Ref<HTMLElement>;
 }) {
   return (
-    <section className="mb-8">
-      <h2 className="border-primary-300 mb-4 border-b pb-1 text-lg font-bold">
-        {title}
-      </h2>
+    <section ref={ref} className="mb-10">
+      <h2 className="mb-6 text-xl">{title}</h2>
       {children}
     </section>
   );
 }
 
-function Labelled({ label, children }: { label: string; children: ReactNode }) {
+function Labeled({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
       <span className="mb-1 block font-medium">{label}</span>

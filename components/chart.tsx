@@ -29,7 +29,7 @@ export interface ChartSeries {
   color?: string;
   width?: number;
   dash?: number[];
-  /** Fill colour under the line. */
+  /** Fill color under the line. */
   fill?: string;
   /** `true`/`false`, or a size in px. Defaults to uPlot's automatic choice. */
   points?: boolean | number;
@@ -87,12 +87,14 @@ export interface ChartProps {
   x: ChartValues;
   series: ChartSeries[];
   text?: ChartText;
-  /** Show a second Y axis on the right and honour `axis: 'right'` series. When off the axis is not created at all. */
+  /** Show a second Y axis on the right and honor `axis: 'right'` series. When off the axis is not created at all. */
   secondaryAxis?: boolean;
   /** Individual points to highlight, e.g. the latest value. */
   markers?: ChartMarker[];
   /** Swap the axes: X runs up the left edge, Y along the bottom (e.g. altitude profiles). */
   vertical?: boolean;
+  /** Give both Y axes the same range (the span of every series together). Only meaningful with `secondaryAxis`. */
+  sameYScale?: boolean;
   /** Fixed scale ranges `[min, max]`; omit a scale to autorange. */
   range?: { x?: [number, number]; y?: [number, number]; y2?: [number, number] };
   /** Final say over the uPlot options (restyle anything). Memoise it: a new identity rebuilds the chart. */
@@ -113,6 +115,7 @@ export function Chart({
   markers,
   vertical = false,
   range,
+  sameYScale = false,
   options,
   height = 420,
   className,
@@ -120,6 +123,11 @@ export function Chart({
 }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
+
+  const visible = useMemo(
+    () => series.filter((s) => secondaryAxis || (s.axis ?? 'left') === 'left'),
+    [series, secondaryAxis]
+  );
 
   useImperativeHandle(
     ref,
@@ -154,11 +162,6 @@ export function Chart({
     [vertical, secondaryAxis]
   );
 
-  const visible = useMemo(
-    () => series.filter((s) => secondaryAxis || (s.axis ?? 'left') === 'left'),
-    [series, secondaryAxis]
-  );
-
   // Latest props for the closures handed to uPlot, so formatters can change without rebuilding the chart.
   const latest = useRef({ x, text, visible, markers });
   latest.current = { x, text, visible, markers };
@@ -167,6 +170,7 @@ export function Chart({
   const structureKey = JSON.stringify([
     vertical,
     secondaryAxis,
+    sameYScale,
     range,
     height,
     text?.title,
@@ -234,6 +238,21 @@ export function Chart({
         y: { ori: vertical ? 0 : 1, range: range?.y },
       };
       if (secondaryAxis) {
+        if (sameYScale) {
+          // Both scales span every series, so the same value sits at the same height on either axis.
+          const shared: uPlot.Range.Function = (u, dataMin, dataMax) => {
+            let lo = dataMin;
+            let hi = dataMax;
+            for (let i = 1; i < u.data.length; i++)
+              for (const v of u.data[i]) {
+                if (v == null) continue;
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+              }
+            return UPlot.rangeNum(lo, hi, 0.1, true);
+          };
+          scales.y.range = shared;
+        }
         axes.push({
           ...axisBase,
           scale: 'y2',
@@ -243,7 +262,10 @@ export function Chart({
           grid: { show: false },
           values: (_u, vals) => vals.map((v) => fmtY2(v)),
         });
-        scales.y2 = { ori: vertical ? 0 : 1, range: range?.y2 };
+        scales.y2 = {
+          ori: vertical ? 0 : 1,
+          range: sameYScale ? scales.y.range : range?.y2,
+        };
       }
 
       const defaults: uPlot.Options = {

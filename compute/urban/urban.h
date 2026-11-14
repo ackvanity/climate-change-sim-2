@@ -41,8 +41,8 @@ namespace Urban
 
   extern double heat_transfer_rate_main_t[7][21][HEAT_TRANSFER_RATE_T_STEPS];
 
-  constexpr double GRID_SIZE = 2;   // in meters
-  constexpr double GRID_HEIGHT = 2; // in meters
+  constexpr double GRID_SIZE = 10;  // in meters
+  constexpr double GRID_HEIGHT = 1; // in meters
 
   class Simulation
   {

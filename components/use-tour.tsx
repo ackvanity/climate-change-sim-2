@@ -13,17 +13,19 @@ import { createPortal } from 'react-dom';
 import { Markdown } from './markdown';
 
 // ---- Tunables ------------------------------------------------------------------------------------------
-/** The window never grows beyond this fraction of the viewport (resizing and the default size are clamped). */
-const MAX_WIDTH_FRACTION = 0.5;
-const MAX_HEIGHT_FRACTION = 0.5;
+/** The window can grow to this fraction of the viewport (1 = full screen). */
+const MAX_WIDTH_FRACTION = 1;
+const MAX_HEIGHT_FRACTION = 1;
 /** Smallest the window can be resized to (unless the viewport is so small that the maximum is lower). */
 const MIN_WIDTH = 260;
 const MIN_HEIGHT = 160;
 /** Size the window opens at, before the user resizes it. */
 const DEFAULT_WIDTH = 420;
 const DEFAULT_HEIGHT = 300;
-/** Gap between the window and the viewport edge when it first opens (bottom-right). */
+/** Gap between the window and the viewport edge when it first opens (bottom-left). */
 const EDGE_MARGIN = 16;
+/** Space kept between a highlighted region and the viewport edge when the page auto-scrolls to show it. */
+const SCROLL_MARGIN = 24;
 /** Space kept between the highlighted region and the dimmed surround. */
 const HIGHLIGHT_PADDING = 6;
 // -------------------------------------------------------------------------------------------------------
@@ -40,7 +42,7 @@ export interface TourSlide {
   /** Markdown. */
   content: string;
   /**
-   * Returns the area to highlight, in viewport pixels, or `null` for no highlight. Called every animation
+   * Returns the area to highlight, in viewport pixels, or `null` for no highlight (the page is then dimmed entirely, so the window still stands out). Called every animation
    * frame while the slide is shown, so it may read refs, element rects or chart coordinates directly and the
    * highlight follows scrolling, resizing and animation.
    */
@@ -203,14 +205,56 @@ function layout(
   const maxH = vh * MAX_HEIGHT_FRACTION;
   const w = clamp(size?.w ?? DEFAULT_WIDTH, Math.min(MIN_WIDTH, maxW), maxW);
   const h = clamp(size?.h ?? DEFAULT_HEIGHT, Math.min(MIN_HEIGHT, maxH), maxH);
-  const x = clamp(pos?.x ?? vw - w - EDGE_MARGIN, 0, vw - w);
+  const x = clamp(pos?.x ?? EDGE_MARGIN, 0, vw - w);
   const y = clamp(pos?.y ?? vh - h - EDGE_MARGIN, 0, vh - h);
   return { x, y, w, h };
 }
 
-/** Same sliding-fill button as the rest of the site; add the colours (`bg-…`, `before:bg-…`). */
+/** Resize handle: the side(s) it drags, as compass letters. */
+type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+/** Invisible handles along the sides (thin) and at the corners (square, drawn on top of the sides). */
+const HANDLES: [Edge, string][] = [
+  ['n', 'inset-x-3 top-0 h-1.5 cursor-ns-resize'],
+  ['s', 'inset-x-3 bottom-0 h-1.5 cursor-ns-resize'],
+  ['w', 'inset-y-3 left-0 w-1.5 cursor-ew-resize'],
+  ['e', 'inset-y-3 right-0 w-1.5 cursor-ew-resize'],
+  ['nw', 'top-0 left-0 size-3 cursor-nwse-resize'],
+  ['ne', 'top-0 right-0 size-3 cursor-nesw-resize'],
+  ['sw', 'bottom-0 left-0 size-3 cursor-nesw-resize'],
+  ['se', 'right-0 bottom-0 size-4 cursor-nwse-resize'],
+];
+
+/** Same sliding-fill button as the rest of the site; add the colors (`bg-…`, `before:bg-…`). */
 const BUTTON =
   'relative cursor-pointer p-2 px-3 before:absolute before:-inset-1 before:block before:w-0 before:transition-all hover:before:w-[calc(100%+8px)] disabled:cursor-default disabled:opacity-40 disabled:before:hidden';
+
+/** Scrolls the page (smoothly) so a region, in page coordinates, is inside the viewport if it fits. */
+function reveal(r: TourRegion) {
+  const axis = (lo: number, hi: number, scroll: number, view: number) => {
+    const top = lo - scroll;
+    const bottom = hi - scroll;
+    const m = SCROLL_MARGIN;
+    if (top >= m && bottom <= view - m) return scroll;
+    // Too big to fit, or above the viewport: align its start; otherwise align its end.
+    if (hi - lo > view - 2 * m || top < m) return Math.max(lo - m, 0);
+    return Math.max(hi - view + m, 0);
+  };
+  const left = axis(
+    Math.min(...r.x),
+    Math.max(...r.x),
+    window.scrollX,
+    window.innerWidth
+  );
+  const top = axis(
+    Math.min(...r.y),
+    Math.max(...r.y),
+    window.scrollY,
+    window.innerHeight
+  );
+  if (left !== window.scrollX || top !== window.scrollY)
+    window.scrollTo({ left, top, behavior: 'smooth' });
+}
 
 const overlaps = (b: Box, r: TourRegion) =>
   b.x < Math.max(...r.x) &&
@@ -219,8 +263,9 @@ const overlaps = (b: Box, r: TourRegion) =>
   b.y + b.h > Math.min(...r.y);
 
 /**
- * The tour window and the highlight over the page. Both are `position: fixed` in a portal, so they work in
- * the full-screen simulation layout and never take part in it. Keep it mounted: closing only hides it, so
+ * The tour window and the highlight over the page, in a portal so they never take part in the page layout.
+ * The window is `position: fixed`; the highlight is `position: absolute` in page coordinates, so it is pinned
+ * to the highlighted spot while the page scrolls. The page scrolls to bring a new region into view. Keep it mounted: closing only hides it, so
  * the window keeps the position and size the user gave it.
  */
 export function TourView({ tour }: { tour: Tour }) {
@@ -228,8 +273,10 @@ export function TourView({ tour }: { tour: Tour }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [region, setRegion] = useState<TourRegion | null>(null);
-  // Re-render on viewport resize so the clamping above follows it.
+  // Re-render on viewport resize and scroll so the window placement follows them (the highlight itself is in
+  // page coordinates and needs no update on scroll).
   const [, bump] = useReducer((n: number) => n + 1, 0);
+  const lastRegion = useRef<TourRegion | null>(null);
 
   const regionFn = useRef(slide?.region);
   useEffect(() => {
@@ -239,10 +286,16 @@ export function TourView({ tour }: { tour: Tour }) {
   useEffect(() => {
     if (!isOpen) return;
     window.addEventListener('resize', bump);
-    return () => window.removeEventListener('resize', bump);
+    window.addEventListener('scroll', bump, { passive: true });
+    return () => {
+      window.removeEventListener('resize', bump);
+      window.removeEventListener('scroll', bump);
+    };
   }, [isOpen]);
 
-  // Poll the region each frame; only touch state when it actually moved.
+  // Poll the region each frame and keep it in page coordinates (viewport + scroll, read in the same frame), so
+  // the highlight is pinned to the page and stays put while the browser scrolls, however late its scroll
+  // events arrive. Only touch state when it actually moved; when it did, scroll it into view.
   useEffect(() => {
     if (!isOpen) return;
     let frame = 0;
@@ -253,21 +306,35 @@ export function TourView({ tour }: { tour: Tour }) {
         [...r.x, ...r.y].every(Number.isFinite) &&
         r.x[0] !== r.x[1] &&
         r.y[0] !== r.y[1];
-      setRegion((prev) =>
-        !ok
-          ? null
-          : prev &&
-              prev.x[0] === r.x[0] &&
-              prev.x[1] === r.x[1] &&
-              prev.y[0] === r.y[0] &&
-              prev.y[1] === r.y[1]
-            ? prev
-            : { x: [r.x[0], r.x[1]], y: [r.y[0], r.y[1]] }
-      );
+      const sx = window.scrollX;
+      const sy = window.scrollY;
+      const next: TourRegion | null = ok
+        ? {
+            x: [r.x[0] + sx, r.x[1] + sx],
+            y: [r.y[0] + sy, r.y[1] + sy],
+          }
+        : null;
+      const prev = lastRegion.current;
+      const same =
+        prev === next ||
+        (prev &&
+          next &&
+          prev.x[0] === next.x[0] &&
+          prev.x[1] === next.x[1] &&
+          prev.y[0] === next.y[0] &&
+          prev.y[1] === next.y[1]);
+      if (!same) {
+        lastRegion.current = next;
+        setRegion(next);
+        if (next) reveal(next);
+      }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      lastRegion.current = null;
+    };
   }, [isOpen]);
 
   useEffect(() => {
@@ -288,7 +355,7 @@ export function TourView({ tour }: { tour: Tour }) {
 
   // Drag (title bar) and resize (corner grip) share one pointer gesture.
   const gesture = useRef<{
-    kind: 'move' | 'resize';
+    kind: 'move' | Edge;
     px: number;
     py: number;
     box: Box;
@@ -299,11 +366,17 @@ export function TourView({ tour }: { tour: Tour }) {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let box = layout(pos, size, vw, vh);
-  // Until the user drags it, keep the window off the highlight: swap to the left edge if it would cover it.
-  if (!pos && region && overlaps(box, region))
-    box = { ...box, x: Math.min(EDGE_MARGIN, vw - box.w) };
+  // Until the user drags it, keep the window off the highlight: swap to the right edge if it would cover it.
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  const inView = region && {
+    x: [region.x[0] - sx, region.x[1] - sx] as [number, number],
+    y: [region.y[0] - sy, region.y[1] - sy] as [number, number],
+  };
+  if (!pos && inView && overlaps(box, inView))
+    box = { ...box, x: Math.max(vw - box.w - EDGE_MARGIN, 0) };
 
-  const grab = (kind: 'move' | 'resize') => ({
+  const grab = (kind: 'move' | Edge) => ({
     onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -317,19 +390,33 @@ export function TourView({ tour }: { tour: Tour }) {
       const dy = e.clientY - g.py;
       if (g.kind === 'move') setPos({ x: g.box.x + dx, y: g.box.y + dy });
       else {
-        // Pin the top-left corner; stop at the viewport edge as well as the size limits.
-        const next = layout(
-          { x: g.box.x, y: g.box.y },
-          { w: g.box.w + dx, h: g.box.h + dy },
-          vw,
-          vh
-        );
-        const room = {
-          w: Math.min(next.w, vw - g.box.x),
-          h: Math.min(next.h, vh - g.box.y),
-        };
-        setPos({ x: g.box.x, y: g.box.y });
-        setSize(room);
+        // The edge(s) being dragged move; the opposite ones stay put. Stop at the viewport edge and at the
+        // size limits.
+        const maxW = vw * MAX_WIDTH_FRACTION;
+        const maxH = vh * MAX_HEIGHT_FRACTION;
+        const { x, y, w, h } = g.box;
+        let nx = x;
+        let ny = y;
+        let nw = w;
+        let nh = h;
+        if (g.kind.includes('e'))
+          nw = clamp(w + dx, Math.min(MIN_WIDTH, maxW), Math.min(maxW, vw - x));
+        if (g.kind.includes('w')) {
+          nw = clamp(w - dx, Math.min(MIN_WIDTH, maxW), Math.min(maxW, x + w));
+          nx = x + w - nw;
+        }
+        if (g.kind.includes('s'))
+          nh = clamp(
+            h + dy,
+            Math.min(MIN_HEIGHT, maxH),
+            Math.min(maxH, vh - y)
+          );
+        if (g.kind.includes('n')) {
+          nh = clamp(h - dy, Math.min(MIN_HEIGHT, maxH), Math.min(maxH, y + h));
+          ny = y + h - nh;
+        }
+        setPos({ x: nx, y: ny });
+        setSize({ w: nw, h: nh });
       }
     },
     onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
@@ -341,10 +428,19 @@ export function TourView({ tour }: { tour: Tour }) {
   const pad = HIGHLIGHT_PADDING;
   return createPortal(
     <>
+      {/* Blocks every pointer event so a stray click can't reach the page (or React ancestors of the portal)
+          and the tour only closes with Esc or the close button. Dims the page itself when nothing is highlighted. */}
+      <div
+        aria-hidden
+        className={`fixed inset-0 z-40 ${region ? '' : 'bg-slate-900/55'}`}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+      />
       {region && (
         <div
           aria-hidden
-          className="outline-primary-400 pointer-events-none fixed z-40 shadow-[0_0_0_9999px_rgba(15,23,42,0.55)] outline-2 transition-[left,top,width,height] duration-150"
+          className="outline-primary-400 pointer-events-none absolute z-40 shadow-[0_0_0_9999px_rgba(15,23,42,0.55)] outline-2 transition-[left,top,width,height] duration-150"
           style={{
             left: Math.min(...region.x) - pad,
             top: Math.min(...region.y) - pad,
@@ -420,21 +516,25 @@ export function TourView({ tour }: { tour: Tour }) {
             style={{ width: `${((tour.index + 1) / tour.count) * 100}%` }}
           />
         </div>
-        <div
-          {...grab('resize')}
-          aria-hidden
-          title="Drag to resize"
-          className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize touch-none"
-        >
-          <svg viewBox="0 0 16 16" className="size-4 text-slate-400">
-            <path
-              d="M15 6 6 15M15 11l-4 4"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              fill="none"
-            />
-          </svg>
-        </div>
+        {HANDLES.map(([edge, className]) => (
+          <div
+            key={edge}
+            {...grab(edge)}
+            aria-hidden
+            className={`absolute z-10 touch-none ${className}`}
+          >
+            {edge === 'se' && (
+              <svg viewBox="0 0 16 16" className="size-4 text-slate-400">
+                <path
+                  d="M15 6 6 15M15 11l-4 4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  fill="none"
+                />
+              </svg>
+            )}
+          </div>
+        ))}
       </div>
     </>,
     document.body

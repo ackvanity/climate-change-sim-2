@@ -56,7 +56,7 @@ export const GRID = {
 
 /** `7 × 21 × 600` little-endian doubles. */
 const TABLE_BYTES = 7 * 21 * 60 * 8;
-/** Solar constant in W/m², as the solver expects. */
+/** Solar constant in W/m², as the solver expects (the atmosphere is accounted for in the solver). */
 export const SOLAR_CONSTANT = 1361;
 /** Time step of the simulation in seconds. */
 export const TIME_STEP_S = 100;
@@ -73,7 +73,7 @@ export interface Material {
   /** Material id as stored in the grid. */
   id: number;
   name: string;
-  /** Any CSS colour. */
+  /** Any CSS color. */
   color: string;
   albedo: number;
   kLateral: number;
@@ -273,7 +273,7 @@ export class Urban {
   // ---- rendering -----------------------------------------------------------------------------------------------
 
   /**
-   * RGBA image (`cols × rows`) of the material map. `palette` holds one RGBA colour per material id (4 bytes each,
+   * RGBA image (`cols × rows`) of the material map. `palette` holds one RGBA color per material id (4 bytes each,
    * `NUM_CELL_TYPES` entries). The result views WASM memory: use it before the next call into the module.
    */
   renderMaterials(palette: Uint8Array): Uint8ClampedArray {
@@ -282,7 +282,7 @@ export class Urban {
   }
 
   /**
-   * RGBA image of the temperature, colours taken from a 256-entry `lut` (1024 bytes) spread over [lo, hi] K. Cells
+   * RGBA image of the temperature, colors taken from a 256-entry `lut` (1024 bytes) spread over [lo, hi] K. Cells
    * with a non-finite temperature come out magenta. Same lifetime as `renderMaterials`.
    */
   renderTemperature(

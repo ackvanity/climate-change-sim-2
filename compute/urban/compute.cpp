@@ -55,16 +55,16 @@ namespace Urban
       double dT = 0;
       dT += get_heat_transfer_rate(grid[idx_cur].T);
       dT += S_in * one_min_albedo[idx];
-      if (cell_params[idx].use_et && dT > 0)
-      {
-        // Priestley-Taylor
-        dT *= get_priestley_taylor_fact(grid[idx_cur].T);
-      }
       dT += k_surface[idx] * (T_ATMOSPHERE - grid[idx_cur].T);
       dT += k_lateral_left[idx] * (grid[idx_left].T - grid[idx_cur].T);
       dT += k_lateral_top[idx] * (grid[idx_top].T - grid[idx_cur].T);
       dT += k_lateral_bottom[idx] * (grid[idx_bottom].T - grid[idx_cur].T);
       dT += k_lateral_right[idx] * (grid[idx_right].T - grid[idx_cur].T);
+      if (cell_params[idx].use_et && dT > 0)
+      {
+        // Priestley-Taylor, applied last: evaporation takes its share of the net energy left after all other fluxes
+        dT *= get_priestley_taylor_fact(grid[idx_cur].T);
+      }
       dT /= heat_capacity[idx];
       grid[idx_res].T = dT + grid[idx_cur].T;
     }
@@ -220,7 +220,12 @@ namespace Urban
     {
       for (int i = 0; i < (rows * cols); i++)
       {
-        one_min_albedo[i] = 1 - this->simulation->celldata[cell_types[i]].albedo;
+        // Sunlight absorbed by the ground under a non-absorbing atmosphere of reflectance r_A, counting the light
+        // bounced between ground and atmosphere: (1 - r_A)(1 - r_s) / (1 - r_A r_s). Equals 1 minus the planetary albedo
+        // r_A + (1 - r_A)^2 r_s / (1 - r_A r_s) (the transmission is squared, not 1 - r_A^2).
+        const double r_A = 0.255;
+        const double r_s = this->simulation->celldata[cell_types[i]].albedo;
+        one_min_albedo[i] = (1 - r_A) * (1 - r_s) / (1 - r_A * r_s);
         k_surface[i] = this->simulation->celldata[cell_types[i]].k_surface_factor * K_SENSIBLE;
         heat_capacity[i] = this->simulation->celldata[cell_types[i]].heat_capacity * GRID_HEIGHT / simulation->dt;
         cell_params[i] = this->simulation->celldata[cell_types[i]].param;
@@ -311,49 +316,56 @@ namespace Urban
     this->impl.reset(new Impl(rows, cols, azimuth, co2_ppm, ch4_ppm, dt, S0, slots, this));
 
     const double NU = 15000;
+    // Thickness trick: only the layer the daily heat wave reaches takes part, i.e. the damping depth
+    // sqrt(2 kappa / omega) with kappa = k / (rho c) and omega = 2 pi / 1 day. With the k and rho c below it is
+    // ~0.1 m for asphalt, concrete and soil. That layer sets both the heat capacity and (as a hack) the lateral
+    // conductance, which scales with the cross-section of the layer.
+    const double DAMPING_DEPTH = 0.1; // in meters
 
     // Initialize data
+    // k_surface_factor scales the sensible-heat exchange with the air by surface roughness: bulk transfer coefficient
+    // ~ 1 / (ln(z / z0) ln(z / z0h)) with z0h = z0 / 10, relative to grass (forest capped at 2.5 of the ~3.6 this gives).
     celldata[0].name = "Asphalt";
     celldata[0].color = "oklch(0.372 0.044 257.29)";
 
-    celldata[0].albedo = 0.04;
-    celldata[0].k_lateral = 0.75 * NU;
-    celldata[0].heat_capacity = 1200000;
-    celldata[0].k_surface_factor = 1.38;
+    celldata[0].albedo = 0.12; // aged road asphalt 0.10-0.18 (fresh 0.05)
+    celldata[0].k_lateral = 0.75 * NU * DAMPING_DEPTH / GRID_HEIGHT;
+    celldata[0].heat_capacity = 2400000 * DAMPING_DEPTH / GRID_HEIGHT;
+    celldata[0].k_surface_factor = 0.75; // smooth pavement, z0 ~ 0.01 m
 
     celldata[1].name = "Concrete";
     celldata[1].color = "oklch(86.9% 0.022 252.894)";
 
-    celldata[1].albedo = 0.30;
-    celldata[1].k_lateral = 0.60 * NU;
-    celldata[1].heat_capacity = 1000000;
-    celldata[1].k_surface_factor = 1.25;
+    celldata[1].albedo = 0.30; // concrete 0.25-0.40 new, ~0.2-0.3 weathered
+    celldata[1].k_lateral = 0.60 * NU * DAMPING_DEPTH / GRID_HEIGHT;
+    celldata[1].heat_capacity = 1800000 * DAMPING_DEPTH / GRID_HEIGHT; // was 2 m: swung only 3 K a day
+    celldata[1].k_surface_factor = 0.75; // smooth pavement, z0 ~ 0.01 m
 
     celldata[2].name = "Grass";
     celldata[2].color = "#b1d084";
 
-    celldata[2].albedo = 0.25;
-    celldata[2].k_lateral = 0.30 * NU;
-    celldata[2].heat_capacity = 800000;
-    celldata[2].k_surface_factor = 0.8;
+    celldata[2].albedo = 0.23; // grass 0.16-0.26
+    celldata[2].k_lateral = 0.30 * NU * DAMPING_DEPTH / GRID_HEIGHT;
+    celldata[2].heat_capacity = 800000 * DAMPING_DEPTH / GRID_HEIGHT;
+    celldata[2].k_surface_factor = 1.0;  // short grass, z0 ~ 0.03 m (reference)
     celldata[2].param.use_et = true;
 
     celldata[3].name = "Forest";
     celldata[3].color = "#4a6f15";
 
-    celldata[3].albedo = 0.15;
+    celldata[3].albedo = 0.13; // deciduous 0.15-0.20, coniferous 0.05-0.15
     celldata[3].k_lateral = 0.30 * NU;
     celldata[3].heat_capacity = 900000;
-    celldata[3].k_surface_factor = 0.8;
+    celldata[3].k_surface_factor = 2.5;  // rough canopy, z0 ~ 1 m: mixes heat into the air best
     celldata[3].param.use_et = true;
 
     celldata[4].name = "Water";
     celldata[4].color = "#8ab3b4";
 
-    celldata[4].albedo = 0.06;
+    celldata[4].albedo = 0.08; // water 0.03-0.10, daily mean incl. low sun
     celldata[4].k_lateral = 0.60 * NU;
     celldata[4].heat_capacity = 4000000;
-    celldata[4].k_surface_factor = 1.66;
+    celldata[4].k_surface_factor = 0.35; // open water, z0 ~ 0.0002 m: smoothest surface
     celldata[4].param.use_et = true;
   }
 

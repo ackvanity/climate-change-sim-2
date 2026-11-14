@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { Chart, type ChartRef, type ChartSeries } from '@/components/chart';
+import { DataExport } from '@/components/data-export';
+import type { ExportColumn } from '@/components/use-export';
 import { Simulation } from '@/components/simulation';
 import { Slider } from '@/components/slider';
 import { Tabs } from '@/components/tabs';
@@ -13,6 +15,7 @@ import {
 import {
   GRID,
   layerAltitudesKm,
+  NUM_LAYERS,
   summarize,
   type MacroState,
 } from '@/interface/greenhouse/greenhouse';
@@ -35,18 +38,105 @@ interface Setting {
   ch4Ppm: number;
 }
 
-type MacroKey = keyof MacroState;
+/** The atmosphere sections the tour describes, as altitude ranges in km (inclusive; neighbours share their boundary). */
+const SECTIONS = {
+  troposphere: [0, TROPOPAUSE_KM],
+  stratosphere: [TROPOPAUSE_KM, STRATOPAUSE_KM],
+  mesosphere: [STRATOPAUSE_KM, MODEL_TOP_KM],
+} as const;
+type Section = keyof typeof SECTIONS;
+type LapseKey = `${Section}LapseKPerKm`;
+
+/** Summary properties plus the lapse rate of each atmosphere section. */
+type Macros = MacroState & Record<LapseKey, number>;
+type MacroKey = keyof Macros;
+
+/** Half-width (in points) of the moving average applied to a section's profile before the line fit. */
+const SMOOTH_HALF_WIDTH = 1;
+
+/**
+ * Lapse rate of a section in K/km: minus the slope of the least-squares line through the section's profile, after a
+ * centred moving average that stays inside the section (so the kinks at its boundaries are not blurred into it).
+ * Positive when temperature falls with height.
+ */
+function lapseRate(z: readonly number[], T: readonly number[]): number {
+  const n = z.length;
+  const smooth = T.map((_, i) => {
+    const lo = Math.max(0, i - SMOOTH_HALF_WIDTH);
+    const hi = Math.min(n - 1, i + SMOOTH_HALF_WIDTH);
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) sum += T[j];
+    return sum / (hi - lo + 1);
+  });
+  const zMean = z.reduce((a, b) => a + b, 0) / n;
+  const tMean = smooth.reduce((a, b) => a + b, 0) / n;
+  let szt = 0;
+  let szz = 0;
+  for (let i = 0; i < n; i++) {
+    szt += (z[i] - zMean) * (smooth[i] - tMean);
+    szz += (z[i] - zMean) ** 2;
+  }
+  return -szt / szz;
+}
+
+// Altitudes of a solve() result with the surface first (0 km), then the slabs.
+const ALTITUDES_KM = [0, ...layerAltitudesKm];
+
+/** `summarize()` plus the per-section lapse rates of a `solve()` result. */
+function macros(co2Ppm: number, ch4Ppm: number, T: Float64Array): Macros {
+  const profile = [T[NUM_LAYERS], ...T.subarray(0, NUM_LAYERS)];
+  const lapse = {} as Record<LapseKey, number>;
+  for (const [name, [from, to]] of Object.entries(SECTIONS)) {
+    const idx = ALTITUDES_KM.flatMap((z, i) =>
+      z >= from && z <= to ? [i] : []
+    );
+    lapse[`${name as Section}LapseKPerKm`] = lapseRate(
+      idx.map((i) => ALTITUDES_KM[i]),
+      idx.map((i) => profile[i])
+    );
+  }
+  return { ...summarize(co2Ppm, ch4Ppm, T), ...lapse };
+}
+
+const lapseVariable = (name: string, [from, to]: readonly number[]) => ({
+  label: `${name} lapse rate (${from}–${to} km)`,
+  unit: 'K/km',
+  decimals: 3,
+});
 
 const MACROS: Record<MacroKey, PlotVariable> = {
-  co2Ppm: { label: 'CO₂', unit: 'ppm', decimals: 0 },
-  ch4Ppm: { label: 'CH₄', unit: 'ppm', decimals: 2 },
+  co2Ppm: { label: 'CO₂ concentration', unit: 'ppm', decimals: 0 },
+  ch4Ppm: { label: 'CH₄ concentration', unit: 'ppm', decimals: 2 },
   meanAtmosphereK: {
     label: 'Mean atmospheric temperature',
     unit: 'K',
     decimals: 2,
   },
-  surfaceK: { label: 'Surface temperature', unit: 'K', decimals: 2 },
+  surfaceK: { label: 'Average surface temperature', unit: 'K', decimals: 2 },
+  troposphereLapseKPerKm: lapseVariable('Troposphere', SECTIONS.troposphere),
+  stratosphereLapseKPerKm: lapseVariable('Stratosphere', SECTIONS.stratosphere),
+  mesosphereLapseKPerKm: lapseVariable('Mesosphere', SECTIONS.mesosphere),
 };
+
+/** One exported row: a visited setting, its summary properties and its full temperature profile. */
+interface ExportRow {
+  state: Macros;
+  /** `solve()` output: slab temperatures (lowest first), then the surface. */
+  T: Float64Array;
+}
+
+const EXPORT_COLUMNS: ExportColumn<ExportRow>[] = [
+  ...(Object.keys(MACROS) as MacroKey[]).map((k) => ({
+    label: MACROS[k].label,
+    unit: MACROS[k].unit,
+    value: (r: ExportRow) => r.state[k],
+  })),
+  ...layerAltitudesKm.map((z, i) => ({
+    label: `Temperature at ${z} km`,
+    unit: 'K',
+    value: (r: ExportRow) => r.T[i],
+  })),
+];
 
 export default function Climate() {
   const { solver, isMock } = useGreenhouse();
@@ -75,12 +165,12 @@ export default function Climate() {
     [solver]
   );
   const states = useMemo(() => {
-    const cache = new Map<string, MacroState>();
+    const cache = new Map<string, Macros>();
     return collected.map((c) => {
       const key = `${c.co2Ppm}/${c.ch4Ppm}`;
       let state = cache.get(key);
       if (!state) {
-        state = summarize(c.co2Ppm, c.ch4Ppm, solver.solve(c.co2Ppm, c.ch4Ppm));
+        state = macros(c.co2Ppm, c.ch4Ppm, solver.solve(c.co2Ppm, c.ch4Ppm));
         cache.set(key, state);
       }
       return state;
@@ -137,10 +227,10 @@ export default function Climate() {
       **Greenhouse gases** have high potency to trap heat and therefore contribute the most to this
       effect. Human activities emit significant amounts of these gases, making the Earth too hot.
 
-      However, not all parts of the atmosphere are affected equally.`,
+      However, not all parts of the atmosphere are affected equally. This simulation demonstrates the response of different parts of the atmosphere with increasing concentrations of greenhouse gases, namely carbon dioxide (CO₂) and methane (CH₄).`,
     },
     {
-      title: `Atmospheric profiles`,
+      title: `Atmospheric Profiles`,
       content: `Properties of the atmosphere (e.g. temperature) vary with height, so we use an
       atmospheric profile to show this behavior.
 
@@ -153,7 +243,7 @@ export default function Climate() {
       region: profileArea,
     },
     {
-      title: `Baseline profiles`,
+      title: `Baseline Profiles`,
       content: `To compare warming effects, it's important to have a baseline to measure differences
       against. In this case, we've set a baseline of 420 ppm CO₂ and 1 ppm CH₄.
 
@@ -163,7 +253,7 @@ export default function Climate() {
       region: profileArea,
     },
     {
-      title: 'Atmosphere layers: Troposphere',
+      title: 'Atmosphere Layers: Troposphere',
       content: `The troposphere, from 0–12 km, is dominated by convection. Warm air has lower
       density, so it naturally rises to the top and releases heat. Cold air from the top is heavier,
       so it sinks to the surface and absorbs heat.
@@ -197,7 +287,7 @@ export default function Climate() {
       region: altitudeBand(0, TROPOPAUSE_KM),
     },
     {
-      title: 'Atmosphere layers: Stratosphere',
+      title: 'Atmosphere Layers: Stratosphere',
       content: `The stratosphere is located just above the troposphere, starting at 12 km and ending
       at 50 km.
 
@@ -213,7 +303,7 @@ export default function Climate() {
       region: altitudeBand(TROPOPAUSE_KM, STRATOPAUSE_KM),
     },
     {
-      title: 'Atmosphere layers: Mesosphere',
+      title: 'Atmosphere Layers: Mesosphere',
       content: `The mesosphere occurs above the stratosphere, and in this region ozone concentration
       drops again, meaning less heat absorbed in this region. Any greenhouse gas here helps emit
       energy to outer space, so the layer cools down.`,
@@ -221,7 +311,7 @@ export default function Climate() {
       region: altitudeBand(STRATOPAUSE_KM, MODEL_TOP_KM),
     },
     {
-      title: `Troposphere warming`,
+      title: `Troposphere Warming`,
       content: `Given that the mesosphere and stratosphere cool down with higher greenhouse gas
       concentrations, why does the surface heat up? This occurs because the gases make the upper
       layer of the atmosphere emit heat more efficiently — both toward and away from the Earth's
@@ -232,7 +322,7 @@ export default function Climate() {
       region: altitudeBand(0, TROPOPAUSE_KM),
     },
     {
-      title: `Quantifying warming`,
+      title: `Quantifying Warming`,
       content: `If you look at the "Macro properties" tab, you can see an adjustable chart where you
       can plot properties of the atmosphere as a function of other properties. You can also plot two
       y-axes simultaneously! By varying carbon dioxide or methane concentrations, you can plot all
@@ -240,7 +330,7 @@ export default function Climate() {
       effect: () => showMacro('co2Ppm'),
     },
     {
-      title: `Carbon dioxide warming`,
+      title: `Carbon Dioxide Warming`,
       content: `Try dragging the carbon dioxide slider and see the path of points created. You can
       see that it follows a logarithmic scale with the warming effect weakening at higher
       concentrations. This happens because the more molecules there are, the more they compete to
@@ -253,7 +343,7 @@ export default function Climate() {
       region: () => regionOf(co2Slider.current),
     },
     {
-      title: `Methane warming`,
+      title: `Methane Warming`,
       content: `Try dragging the methane slider. A similar effect occurs with the same mechanism,
       only the curve looks slightly different because methane has different properties from carbon
       dioxide.`,
@@ -279,15 +369,15 @@ export default function Climate() {
   return (
     <Simulation>
       <Simulation.Heading
-        title="Thermodynamics of Climate Change"
+        title="Greenhouse Effect Mechanisms"
         tour={tour}
       ></Simulation.Heading>
       <Simulation.Main>
         <Simulation.Sidebar>
-          <h2 className="mb-6 text-xl">Atmosphere</h2>
+          <h2 className="mb-6 text-xl">Atmospheric Gas Concentrations</h2>
           <Slider
             ref={co2Slider}
-            label="CO₂"
+            label="CO₂ concentration"
             value={co2}
             min={GRID.co2Ppm.min}
             max={GRID.co2Ppm.max}
@@ -297,7 +387,7 @@ export default function Climate() {
           />
           <Slider
             ref={ch4Slider}
-            label="CH₄"
+            label="CH₄ concentration"
             value={ch4}
             min={GRID.ch4Ppm.min}
             max={GRID.ch4Ppm.max}
@@ -312,6 +402,18 @@ export default function Climate() {
               radiative-equilibrium data is not yet available in the browser.
             </p>
           )}
+          <DataExport
+            filename="greenhouse-data"
+            sheetName="Greenhouse"
+            description={`Every gas setting you have visited (up to ${MAX_COLLECTED}), with its mean atmospheric and surface temperature, the lapse rate of each atmosphere layer and the temperature at each of the ${NUM_LAYERS} altitudes.`}
+            columns={EXPORT_COLUMNS}
+            rows={() =>
+              collected.map((c) => {
+                const T = solver.solve(c.co2Ppm, c.ch4Ppm);
+                return { state: macros(c.co2Ppm, c.ch4Ppm, T), T };
+              })
+            }
+          />
         </Simulation.Sidebar>
         <div className="min-w-0 flex-1 p-8">
           <Tabs
@@ -396,7 +498,8 @@ function ProfileChart({
       vertical
       height={560}
       text={{
-        title: 'Equilibrium temperature profile',
+        title:
+          'Average Temperature Profile (Altitude vs Temperature) at Equilibrium',
         xLabel: 'Altitude (km)',
         yLabel: 'Temperature (K)',
         formatY: (v) => v.toFixed(0),

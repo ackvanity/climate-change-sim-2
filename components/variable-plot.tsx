@@ -63,6 +63,7 @@ export function VariablePlot<K extends string>({
   height = 480,
   mode = 'points',
 }: VariablePlotProps<K>) {
+  const [sameScale, setSameScale] = useState(false);
   const [inner, setInner] = useState<PlotAxes<K>>({
     x: defaultX,
     y: defaultY,
@@ -152,6 +153,17 @@ export function VariablePlot<K extends string>({
           onChange={(y2) => setAxes({ y2 })}
           allowNone
         />
+        {y2Key && (
+          <label className="flex items-center gap-2 pb-1 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={sameScale}
+              onChange={(e) => setSameScale(e.target.checked)}
+              className="accent-primary-600"
+            />
+            Use a single scale for both Y axes
+          </label>
+        )}
         {onClear && (
           <button
             ref={clearRef}
@@ -168,6 +180,7 @@ export function VariablePlot<K extends string>({
         markers={markers}
         text={text}
         secondaryAxis={y2Key !== ''}
+        sameYScale={sameScale}
         height={height}
       />
       {caption && (

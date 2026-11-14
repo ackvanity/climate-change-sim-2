@@ -22,8 +22,10 @@ creates a simulation (the constructor builds its working table from it).
 ## Things to know
 
 - **Rebuild** with `interface/urban/build.sh` whenever `compute/urban/` changes (needs `em++`).
-- `update()` in the solver does not copy `Cell::type` between its slots, so every edit has to write the type into every slot.
-  `urban_wasm.cpp` learns the slot addresses at creation and does this for `paint`, `fill` and `loadTypes`.
+- Material ids live in one array (`Simulation::getCellTypes()`), not in the cells. Every edit (`paint`, `fill`,
+  `loadTypes`) must be followed by `syncCellTypes()`, which rebuilds the per-cell coefficients; `urban_wasm.cpp` does this,
+  and also re-syncs when `dt` changes (it is baked into the heat capacity). Only materials with a name can be painted.
+- Temperature edits write the current slot and then call `propogateChanges()` to copy it into the other slots.
 - One simulation exists at a time; `reset()` replaces it. Materials are read once (stable array for React).
 - `renderMaterials` / `renderTemperature` return a view into WASM memory; use it before the next call into the module.
 - The build passes `-Duint=unsigned` because `urban.h` uses the glibc typedef `uint`.

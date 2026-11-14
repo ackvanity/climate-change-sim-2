@@ -38,9 +38,9 @@ export const NUM_LAYERS = 80;
 export const LAYER_HEIGHT_KM = 1;
 /**
  * Where slab i's temperature sits inside its slab, as a fraction of the slab thickness above its bottom (0 = bottom
- * edge, 0.5 = centre, 1 = top edge). The current precompute anchors slab i to the AFGL temperature at z = i+1 km (the
+ * edge, 0.5 = center, 1 = top edge). The current precompute anchors slab i to the AFGL temperature at z = i+1 km (the
  * top edge), so its baseline reproduces AFGL when plotted at 1, 2, ... km. Change to 0.5 if the precompute is changed
- * to slab-centre values (see compute/greenhouse/INTERFACE.md).
+ * to slab-center values (see compute/greenhouse/INTERFACE.md).
  */
 export const LAYER_ANCHOR = 1;
 /** Altitude in km at which each slab's temperature applies, lowest first. */
